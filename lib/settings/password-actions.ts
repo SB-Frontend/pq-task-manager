@@ -6,7 +6,7 @@ import { requireUser } from "@/lib/auth/auth";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { getSession } from "@/lib/auth/session";
 import { passwordChangeSchema } from "@/lib/settings/schemas";
-import { sessions } from "@/lib/storage/sessions";
+import { deleteOtherSessions } from "@/lib/storage/sessions";
 import { users } from "@/lib/storage/users";
 
 export interface PasswordFormState {
@@ -57,9 +57,7 @@ export async function changePasswordAction(
 
   // Sign out everywhere else, keeping the session that made the change.
   const current = await getSession();
-  const revoked = await sessions.removeWhere(
-    (session) => session.userId === stored.id && session.id !== current?.id,
-  );
+  const revoked = await deleteOtherSessions(stored.id, current?.id);
 
   return {
     success:

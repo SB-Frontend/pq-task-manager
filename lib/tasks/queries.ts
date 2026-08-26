@@ -87,7 +87,7 @@ export async function listTasksForProject(
 ): Promise<{ tasks: Task[]; totalCount: number }> {
   await requireUser();
 
-  const own = await tasks.findWhere((task) => task.projectId === projectId);
+  const own = await tasks.findWhere({ projectId });
 
   return { tasks: applyTaskQuery(own, query), totalCount: own.length };
 }

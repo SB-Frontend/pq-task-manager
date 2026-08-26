@@ -7,7 +7,7 @@ A small, fast personal tracker for projects, tasks, and work logs.
 - Next.js (App Router) + React
 - TypeScript
 - Tailwind CSS
-- Local JSON file storage
+- **Supabase (PostgreSQL)** for all persistent data
 - Email / password authentication with server-side sessions
 - Excel export via ExcelJS
 
@@ -15,11 +15,72 @@ A small, fast personal tracker for projects, tasks, and work logs.
 
 ```bash
 npm install
+cp .env.example .env.local   # then fill in the Supabase values
 npm run dev
 ```
 
-The application runs at http://localhost:3000. No database, no environment
-variables, and no external services are required.
+The application runs at http://localhost:3000.
+
+## Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL. Safe in the browser. |
+| `SUPABASE_SERVICE_ROLE_KEY` | **Server only.** Bypasses RLS and grants full database access. |
+| `ALLOW_REGISTRATION` | Optional. `true` temporarily opens registration. See below. |
+
+`SUPABASE_SERVICE_ROLE_KEY` must **never** carry a `NEXT_PUBLIC_` prefix and must
+never be committed. Find it in Supabase under Project Settings → API →
+`service_role`.
+
+`NODE_ENV=production` additionally marks the session cookie `Secure`, so
+production must be served over HTTPS.
+
+## Database
+
+All application data lives in Supabase PostgreSQL:
+
+| Table | Contents |
+| --- | --- |
+| `users` | Accounts and bcrypt password hashes |
+| `sessions` | Server-side sessions |
+| `projects` | Projects |
+| `tasks` | Tasks, including `assignee_id` |
+| `work_logs` | Work sessions, linked to a task |
+| `activities` | Lightweight activity history |
+
+### First-time setup
+
+1. Create a Supabase project.
+2. Run `supabase/schema.sql` in the SQL Editor. It creates all six tables with
+   foreign keys and indexes, and enables Row Level Security.
+3. Put the URL and `service_role` key in `.env.local`.
+
+### Access model
+
+The application authenticates users itself and reaches Postgres **only from the
+server**, using the service-role key. Row Level Security is enabled on every
+table with **no policies**, so the publishable key — which does reach browsers —
+can read and write nothing. Verified: with real data present, the public key
+returns zero rows and its inserts, updates and deletes are all rejected.
+
+All database access goes through `lib/storage/`, which is `server-only`. A
+client component importing it is a build failure, not a runtime bug.
+
+## Registration
+
+**Registration is closed by default.** It is open only when:
+
+1. No account exists yet, so a fresh deployment can be bootstrapped, or
+2. `ALLOW_REGISTRATION=true` is explicitly set.
+
+This matters because the application has **no per-user data scoping** — every
+signed-in user sees every project, task and work log. Task assignment records
+who is working on something; it is not access control. Leaving registration open
+on a public URL would let anyone read and edit everything.
+
+To add someone: set `ALLOW_REGISTRATION=true`, have them register, then remove
+the variable and redeploy.
 
 ## Scripts
 
@@ -30,132 +91,45 @@ variables, and no external services are required.
 | `npm run start` | Serve the production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | TypeScript check (no emit) |
-| `npm run backup` | Copy `data/` to a timestamped, checksummed backup |
-
-## Environment variables
-
-**None.** The application reads no configuration beyond `NODE_ENV`, which
-Next.js sets for you. `NODE_ENV=production` additionally marks the session
-cookie `Secure`, so production must be served over HTTPS.
-
-## Data storage
-
-Records are stored as JSON files in `data/`:
-
-```text
-data/
-  users.json
-  sessions.json
-  projects.json
-  tasks.json
-  work-logs.json
-  activities.json
-```
-
-Each file holds a JSON array and is created automatically on first use, so a
-fresh clone needs no setup. The files are git-ignored: they hold personal data,
-not source code.
-
-All file access goes through the server-side storage layer in `lib/storage/`.
-UI components never read or write files themselves.
-
-### How writes are kept safe
-
-- **Serialised.** Every write across every collection passes through a single
-  in-process queue, so two overlapping requests cannot lose one another's
-  changes.
-- **Atomic.** Content is written to a temporary file and then renamed over the
-  target, so a reader never sees a half-written file and a crash mid-write
-  cannot corrupt one.
-
-### Limitations you must understand
-
-1. **Single process only.** The write queue lives in memory. Two Node processes
-   (a cluster, PM2 in cluster mode, or several instances behind a load
-   balancer) would interleave read-modify-write cycles and lose data.
-2. **A writable, persistent disk is required.** The store is
-   `<project>/data` resolved from the working directory.
-3. **Individual writes are atomic; sequences are not.** A crash between two
-   related writes can leave partial state.
-4. **No transactions or referential integrity.** Both are enforced in
-   application code.
-5. **Whole-file rewrite per change.** Fine for hundreds of records; it will
-   degrade in the tens of thousands.
-6. **All signed-in users see all data.** Task assignment records who is working
-   on something; it is not access control.
+| `npm run backup` | Copy the legacy `data/` JSON files to a checksummed backup |
+| `npm run migrate:supabase` | One-off import of `data/*.json` into Supabase |
 
 ## Deployment
 
-### Supported model
+Supabase handles persistence, so the application is **stateless** and deploys
+anywhere that runs Node.js 20.9+ — including **Vercel and other serverless
+platforms**.
 
-A **single long-running Node process with a persistent, writable disk**:
+Set both environment variables on the host, then deploy:
 
 ```bash
 npm ci
 npm run build
-npm run start          # serves on PORT, default 3000
+npm run start
 ```
 
-Suitable targets: a VPS, a container with a mounted volume, or your own
-machine. Requirements:
+On Vercel, add `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` under
+Settings → Environment Variables. The service-role key must not be prefixed
+`NEXT_PUBLIC_`.
 
-- Node.js 20.9+ (Next.js 16)
-- Read/write permission on `data/`
-- Exactly **one** application instance (see limitation 1 above)
-- HTTPS in production, so the `Secure` session cookie is honoured
-- `data/` on a volume that survives restarts and redeploys
+> **Earlier versions stored data in local JSON files and could not run on
+> Vercel** — the filesystem is read-only and instances are not shared, so writes
+> were silently lost. That limitation is gone.
 
-### Not supported: Vercel and other serverless platforms
+### Recommended before exposing a public URL
 
-**Do not deploy this version to Vercel, or to any serverless or
-multi-instance platform.** The build and deployment will *succeed*, which is
-what makes it dangerous — the application will then lose data silently:
+Because there is no per-user data scoping, restrict who can reach the
+deployment — for example Vercel Deployment Protection, or hosting it behind a
+private network — and keep registration closed.
 
-- The filesystem is read-only apart from a temporary directory
-- Each invocation may run on a different instance, so writes are not shared
-- Instances are recycled, discarding anything written
+## Backups
 
-Users would register, create projects, and find them gone, with no error shown.
+Supabase provides automatic backups on its paid plans; on the free plan, take
+your own periodically (Supabase Dashboard → Database → Backups, or `pg_dump`).
 
-Serverless deployment requires replacing `lib/storage/` with an external
-database. That is a deliberate future migration, not a configuration change.
-
-## Backup and restore
-
-`data/` is the entire application state. Back it up regularly.
-
-### Backup
-
-```bash
-npm run backup
-```
-
-Copies every `data/*.json` file to `backups/<timestamp>/`, verifies each copy
-against a SHA-256 checksum, and writes a `MANIFEST.json` recording the digests.
-The command only ever reads `data/` and writes a new folder — it can never
-overwrite live data. `backups/` is git-ignored.
-
-Schedule it with cron, Task Scheduler, or a timer unit, and copy the folder
-off the machine.
-
-### Restore
-
-Restoring is intentionally manual, so no command exists that can overwrite live
-data by accident:
-
-1. **Stop the application.**
-2. Back up the current state first: `npm run backup`
-3. Copy the files from the chosen backup folder over `data/`.
-4. Verify against the backup's `MANIFEST.json`:
-
-   ```bash
-   node -e "const fs=require('fs'),c=require('crypto'),p=require('path');const d=process.argv[1];const m=JSON.parse(fs.readFileSync(p.join(d,'MANIFEST.json'),'utf8'));for(const f of m.files){const h=c.createHash('sha256').update(fs.readFileSync(p.join('data',f.file))).digest('hex');console.log(f.file, h===f.sha256?'OK':'MISMATCH');}" backups/<timestamp>
-   ```
-
-5. Start the application.
-
-Sessions are part of the data. Restoring an older `sessions.json` may sign
-users out, which is expected and harmless.
+`npm run backup` copies the **legacy** `data/*.json` files with SHA-256
+verification. Those files are the pre-migration snapshot, retained as a
+fallback. They are no longer read or written by the application.
 
 ## Structure
 
@@ -163,18 +137,18 @@ users out, which is expected and harmless.
 app/           Routes and layouts (App Router)
 components/    Reusable UI components
 lib/           Server-side data access, helpers, configuration
-lib/storage/   JSON storage layer (server-only)
+lib/storage/   Supabase data layer (server-only)
 types/         Shared TypeScript types
-scripts/       Maintenance scripts (backup)
-data/          JSON data files (git-ignored)
-backups/       Local backups (git-ignored)
+scripts/       Maintenance scripts (backup, migration)
+supabase/      schema.sql
+data/          Legacy JSON snapshot, git-ignored, no longer used at runtime
 ```
 
 ## Known dependency advisory
 
 `exceljs@4.4.0` pulls in `uuid@8.3.2`, which carries a moderate advisory
 ("missing buffer bounds check in v3/v5/v6 when `buf` is provided"). ExcelJS
-4.4.0 is the latest release and npm's suggested remedy is a major downgrade.
-The vulnerable path requires passing a caller-controlled buffer into `uuid`,
-which ExcelJS never exposes, so it is not reachable from this application.
-This is an accepted, recorded decision.
+4.4.0 is the latest release and npm's suggested remedy is a major downgrade. The
+vulnerable path requires passing a caller-controlled buffer into `uuid`, which
+ExcelJS never exposes, so it is not reachable from this application. This is an
+accepted, recorded decision.

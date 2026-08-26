@@ -74,7 +74,7 @@ export async function getProject(id: string): Promise<ProjectWithStats | null> {
   const project = await projects.find(id);
   if (!project) return null;
 
-  const projectTasks = await tasks.findWhere((task) => task.projectId === id);
+  const projectTasks = await tasks.findWhere({ projectId: id });
   const allLogs = await workLogs.list();
   return withStats(project, projectTasks, allLogs);
 }
@@ -83,6 +83,6 @@ export async function getProject(id: string): Promise<ProjectWithStats | null> {
 export async function countArchivedProjects(): Promise<number> {
   await requireUser();
 
-  const archived = await projects.findWhere((project) => project.status === "archived");
+  const archived = await projects.findWhere({ status: "archived" });
   return archived.length;
 }

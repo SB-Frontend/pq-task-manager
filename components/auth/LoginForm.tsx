@@ -9,7 +9,12 @@ import { loginAction, type AuthFormState } from "@/lib/auth/actions";
 
 const initialState: AuthFormState = {};
 
-export default function LoginForm() {
+export default function LoginForm({
+  registrationOpen = false,
+}: {
+  /** Decided on the server; the link is pointless when registration is closed. */
+  registrationOpen?: boolean;
+}) {
   const [state, formAction, pending] = useActionState(loginAction, initialState);
 
   return (
@@ -45,15 +50,17 @@ export default function LoginForm() {
         {pending ? "Signing in..." : "Login"}
       </Button>
 
-      <p className="text-center text-sm text-muted">
-        Don&apos;t have an account?{" "}
-        <Link
-          href="/register"
-          className="font-medium text-foreground underline underline-offset-4"
-        >
-          Register
-        </Link>
-      </p>
+      {registrationOpen && (
+        <p className="text-center text-sm text-muted">
+          Don&apos;t have an account?{" "}
+          <Link
+            href="/register"
+            className="font-medium text-foreground underline underline-offset-4"
+          >
+            Register
+          </Link>
+        </p>
+      )}
     </form>
   );
 }

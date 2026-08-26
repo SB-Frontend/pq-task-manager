@@ -60,7 +60,7 @@ application with real requests, not inferred from a passing build.
 | Framework | Next.js 16.3.2, App Router |
 | UI | React 19.2.8 |
 | Styling | Tailwind CSS v4 |
-| Persistence | JSON files on the local filesystem |
+| Persistence | **Supabase (PostgreSQL)** via `@supabase/supabase-js` |
 | Validation | Zod 4 |
 | Password hashing | bcryptjs 3, cost factor 12 |
 | Spreadsheet export | ExcelJS 4.4.0 |
@@ -68,8 +68,17 @@ application with real requests, not inferred from a passing build.
 | Module system | ESM |
 | Linting | ESLint 9 with `eslint-config-next` |
 
-The complete runtime dependency list is exactly seven packages:
-`bcryptjs`, `exceljs`, `next`, `react`, `react-dom`, `server-only`, `zod`.
+The complete runtime dependency list is nine packages:
+`@supabase/supabase-js`, `@supabase/ssr`, `bcryptjs`, `exceljs`, `next`,
+`react`, `react-dom`, `server-only`, `zod`.
+
+> **Amended (Supabase migration).** Persistence moved from local JSON files to
+> Supabase PostgreSQL. The reason was concrete: the application was deployed to
+> Vercel and login did not work, because a serverless filesystem is read-only
+> and instances are not shared, so sessions never persisted.
+>
+> `@supabase/ssr` is currently unused — it exists to refresh *Supabase Auth*
+> sessions, and this project keeps its own authentication (§7).
 
 There is **no** Express, no Sequelize, no MySQL, no ORM, no state-management
 library, no UI component library, and no test framework.
@@ -111,15 +120,15 @@ Server Actions  ·  server-side queries
 Domain modules      lib/{auth,projects,tasks,work-logs,dashboard,settings,users}
       │
       ▼
-Storage layer       lib/storage/*        ← the only code that touches the disk
+Storage layer       lib/storage/*        ← the only code that reaches the database
       │
       ▼
-JSON files          data/*.json
+Supabase PostgreSQL
 ```
 
 ### Layer rules
 
-- UI components never read or write files, and never import the storage layer.
+- UI components never reach the database, and never import the storage layer.
 - Every module under `lib/storage/` and every server-side query module begins
   with `import "server-only"`, so a client import is a **build failure**, not a
   runtime bug.
@@ -142,8 +151,9 @@ lib/            Domain modules, storage layer, helpers
 lib/storage/    JSON storage layer (server-only)
 types/          Shared TypeScript types
 scripts/        Maintenance scripts (backup)
-data/           JSON data files (git-ignored)
-backups/        Local backups (git-ignored)
+supabase/       schema.sql
+data/           Legacy JSON snapshot (git-ignored, no longer used at runtime)
+backups/        Local backups of the legacy snapshot (git-ignored)
 ```
 
 `hooks/` and `public/` exist from the specification's suggested structure (§28
@@ -155,82 +165,109 @@ of the specification) and are currently empty. They are retained deliberately.
 
 **Decided · Implemented · Verified**
 
-The specification (§4) asks for "the simplest appropriate solution" for a
-single-user application, and requires that "the architecture should allow the
-storage layer to be replaced later if required."
+Persistence is **Supabase PostgreSQL**, reached from the server through
+`@supabase/supabase-js`.
 
-The storage layer is JSON files, one per collection, behind a single typed
-interface.
+> **Amended.** This section previously specified local JSON files. That choice
+> satisfied specification §4 ("the simplest appropriate solution") for local
+> single-user use, but it made the application undeployable: on Vercel the
+> filesystem is read-only and instances are not shared, so login silently failed
+> because sessions never persisted. Specification §4 also required that "the
+> architecture should allow the storage layer to be replaced later if required",
+> and that is exactly what happened — the swap changed `lib/storage/*` and nine
+> call sites, and **no route, component, form, or validation schema changed.**
 
 ### Collections
 
-| File | Record | Id prefix |
+| Table | Record | Id prefix |
 |---|---|---|
-| `users.json` | `User` | `user_` |
-| `sessions.json` | `Session` | 32 random bytes, base64url (§7) |
-| `projects.json` | `Project` | `project_` |
-| `tasks.json` | `Task` | `task_` |
-| `work-logs.json` | `WorkLog` | `worklog_` |
-| `activities.json` | `Activity` | `activity_` |
+| `users` | `User` | `user_` |
+| `sessions` | `Session` | 32 random bytes, base64url (§7) |
+| `projects` | `Project` | `project_` |
+| `tasks` | `Task` | `task_` |
+| `work_logs` | `WorkLog` | `worklog_` |
+| `activities` | `Activity` | `activity_` |
 
-Each file holds a JSON array and is created automatically on first use, so a
-fresh clone requires no setup.
+The schema lives in `supabase/schema.sql` and is applied once through the
+Supabase SQL Editor.
 
 ### The storage interface
 
-`lib/storage/json.ts` exports one factory, `createCollection<T>(fileName,
+`lib/storage/collection.ts` exports one factory, `createCollection<T>(table,
 idPrefix)`, returning:
 
 ```ts
-list()          find(id)          findWhere(predicate)   findOneWhere(predicate)
+list()          find(id)          findWhere(filter)   findOneWhere(filter)
 insert(data, id?)                 update(id, changes)
-remove(id)      removeWhere(predicate)
+remove(id)      removeWhere(filter)
 ```
 
-Every entity module is three lines. Filesystem logic exists in exactly one
-place; no collection duplicates it.
+**Amended:** `findWhere` / `findOneWhere` / `removeWhere` previously took a
+JavaScript predicate. A predicate cannot cross a database boundary, so they now
+take an equality filter object. Every call site was a simple equality except two
+comparisons — the session expiry sweep and "revoke all sessions but this one" —
+which became explicit queries in `lib/storage/sessions.ts`.
+
+Two conventions are translated in the storage layer and nowhere else:
+
+- TypeScript camelCase ↔ Postgres snake_case.
+- TypeScript optional properties ↔ SQL `NULL`. A `NULL` column is omitted from
+  the record; an absent property is written as `NULL`, which clears the column.
 
 ### Write safety
 
-- **Serialised.** Every write across every collection passes through a single
-  in-process promise queue. A read-modify-write cycle is not atomic on its own,
-  so two overlapping requests would otherwise drop one of the two changes.
-- **Atomic.** Content is written to a temporary file and then renamed over the
-  target, so a reader never observes a half-written file and a crash mid-write
-  cannot corrupt one.
-
-**Verified:** 25 concurrent inserts produced 25 persisted records, none lost.
+- **Atomic per statement.** An update is a single SQL statement, so the
+  read-modify-write race the JSON layer had to guard against no longer exists.
+- **Concurrency handled by Postgres.** The in-process write queue is gone; it
+  was a single-instance construct and is unnecessary here.
+- **Referential integrity enforced by the database** through foreign keys, not
+  only by application code.
 
 ### Identifiers
 
-Ids are prefixed, sortable, opaque strings — `prefix_` + base36 timestamp +
-random hex, e.g. `task_mt8fih2gb6b87544d0`. Array indexes are never used as
-identifiers. The format is deliberately migration-friendly: a future database
-can store the same string as a primary key.
+Ids remain prefixed, sortable, opaque strings — `prefix_` + base36 timestamp +
+random hex — stored as `text` primary keys. Keeping the existing format meant
+every migrated record retained its id and every relationship survived intact.
 
 ### Dates
 
-- **Timestamps** (`createdAt`, `updatedAt`) are full ISO 8601 strings.
+- **Timestamps** (`createdAt`, `updatedAt`) are `timestamptz`.
 - **Calendar-only values** (`Project.startDate`, `Project.targetDate`,
   `Task.dueDate`, `Task.startedAt`, `Task.completedAt`, `WorkLog.date`) are
-  `YYYY-MM-DD` strings.
+  `date` columns, still surfaced as `YYYY-MM-DD` strings.
 
-Calendar dates are never parsed through `new Date()` for display or comparison.
-They are compared as strings (which sorts correctly) and formatted by splitting
-on `-`. This removes an entire class of timezone off-by-one-day bugs.
+The database now enforces the calendar/timestamp split that was previously only
+a convention.
 
 ### Derived data is never stored
 
-Project progress, task counts, logged time, and all dashboard statistics are
-computed on read from the underlying records. No progress field, no counter, and
-no dashboard collection exists.
+Unchanged. Project progress, task counts, logged time, and all dashboard
+statistics are computed on read.
 
-### Current storage decision
+### Access model and security
 
-**Decided:** JSON storage is retained for this version. A migration to
-Supabase/PostgreSQL was investigated in detail and **deliberately deferred**
-until application behaviour is stable. Supabase is explicitly **out of scope**
-for the current version. See §21 and §23.
+The application authenticates users itself (§7) and reaches Postgres **only from
+the server**, using the **service-role key**. Row Level Security is enabled on
+every table with **no policies**, so the publishable key — which does reach
+browsers — can read and write nothing.
+
+**Verified with real data present:** the service-role client sees all rows; the
+public key returns **zero** rows on all six tables, and its `INSERT` is rejected
+with `42501` while `UPDATE` and `DELETE` affect no rows.
+
+### The legacy JSON snapshot
+
+`data/*.json` is retained as a pre-migration fallback. It is **not read or
+written by the application** — verified: zero filesystem calls and zero
+references to `data/` anywhere in `lib/`, `app/`, or `components/`.
+
+### Migration
+
+`scripts/migrate-to-supabase.mjs` performed a one-off import. It upserts by
+primary key, so it is re-runnable, and it never modifies the JSON files.
+**Verified:** all 10 records migrated and compared field-by-field against the
+source, including the bcrypt hash byte-for-byte, session id and expiry, and
+every foreign key resolving to the correct parent row.
 
 ---
 
@@ -254,7 +291,7 @@ Next.js server (Server Actions / Server Components)
 lib/auth/session.ts
    │
    ▼
-data/sessions.json
+Supabase `sessions` table
 ```
 
 ### Why sessions rather than JWT
@@ -285,9 +322,9 @@ The actual implementation:
 | Session creation | `lib/auth/session.ts` |
 | Identifier | `node:crypto` `randomBytes(32)`, base64url (43 chars) |
 | Cookie handling | `next/headers` `cookies()` |
-| Store | `data/sessions.json`, via the standard storage layer |
+| Store | Supabase `sessions` table, via the standard storage layer |
 | Lifetime | 7 days |
-| Expired-session cleanup | Swept on session creation; an expired session is also removed the moment it is read |
+| Expired-session cleanup | Swept on session creation via a SQL `delete ... where expires_at < now()`; an expired session is also removed the moment it is read |
 
 ### Session rules
 
@@ -342,9 +379,26 @@ no middleware is used — the check lives next to the data it protects.
 Email verification, password reset, OAuth/social login, 2FA, roles, and
 permissions are **Deferred** — excluded by specification §17 for v1.
 
-Registration is currently **open**: anyone reaching `/register` can create an
-account. This is a recorded, accepted decision for the current single-user
-scope.
+### Registration
+
+**Amended — registration is now closed by default.**
+
+Previously anyone reaching `/register` could create an account. Combined with
+the absence of per-user data scoping (§21), a public deployment would have let
+any visitor read and edit everything. Registration is now open only when:
+
+1. **No account exists yet** — so a fresh deployment can be bootstrapped; or
+2. **`ALLOW_REGISTRATION=true`** is explicitly set, used deliberately and
+   temporarily when another person needs an account.
+
+The check lives in `isRegistrationOpen()` and is enforced inside
+`registerUser()` — the single function that inserts a user — **before** the
+write, so a direct Server Action call cannot bypass it. The register page shows
+a closed state and the login page hides the register link.
+
+**Verified:** with one account present and no flag set, `/register` renders
+"Registration closed", the login page shows zero register links, and no account
+was created by an attempted submission.
 
 ---
 
@@ -864,7 +918,9 @@ status-code consequence of the loading boundary.
 
 ### Supported model
 
-A **single long-running Node process with a persistent, writable disk**:
+**Amended.** Supabase holds all state, so the application is **stateless** and
+runs anywhere with Node.js 20.9+ — **including Vercel and other serverless
+platforms.**
 
 ```bash
 npm ci
@@ -877,48 +933,51 @@ Requirements:
 | Requirement | Reason |
 |---|---|
 | Node.js 20.9+ | Next.js 16 |
-| Persistent writable disk | The store is `<project>/data` |
-| **Exactly one instance** | The write queue is in-process |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only database access |
 | HTTPS in production | The session cookie is `Secure` when `NODE_ENV=production` |
-| `data/` on a volume surviving restarts | Otherwise all state is lost |
+
+No writable disk, no single-instance constraint, and no persistent volume are
+required any more.
 
 ### Environment variables
 
-**None.** The application reads no configuration beyond `NODE_ENV`, which
-Next.js sets. There are no secrets to manage and no `.env` file is required.
+**Amended — the application previously required none.**
 
-### Vercel and serverless are unsupported
+| Variable | Scope |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Public; safe in the browser |
+| `SUPABASE_SERVICE_ROLE_KEY` | **Server only.** Bypasses RLS. Never `NEXT_PUBLIC_`, never committed |
+| `ALLOW_REGISTRATION` | Optional; `true` temporarily opens registration |
 
-**Decided.** This version must **not** be deployed to Vercel or any serverless
-or multi-instance platform:
+**Verified:** the service-role key appears **zero** times across the 36 files of
+the built client bundle, and the string `SERVICE_ROLE` appears in none of them.
 
-- The filesystem is read-only apart from a temporary directory.
-- Each invocation may run on a different instance, so writes are not shared.
-- Instances are recycled, discarding anything written.
+### Previous limitation, now resolved
 
-The build and deployment would **succeed**, which is precisely the danger: the
-application then loses data silently. Serverless deployment requires replacing
-`lib/storage/` with an external database — a deliberate future migration, not a
-configuration change.
+Earlier versions stored data in local JSON files and **could not run on Vercel**:
+the filesystem is read-only, instances are not shared, and writes were silently
+lost. This was observed in production — login appeared to succeed and the
+session immediately vanished. It is what prompted the migration.
+
+### Remaining deployment caution
+
+The application still has **no per-user data scoping** (§21). Registration is
+closed by default, which removes the main exposure, but anyone who obtains an
+account sees all data. For a public URL, also restrict who can reach the
+deployment — for example Vercel Deployment Protection.
 
 ### Backup and restore
 
-**Implemented · Verified**
+**Amended.** Supabase now holds all state, so backups are a database concern.
 
-`data/` is the entire application state.
+- Supabase provides automatic backups on its paid plans. On the free plan, take
+  them manually (Dashboard → Database → Backups, or `pg_dump`).
+- `npm run backup` still exists but now copies only the **legacy**
+  `data/*.json` snapshot, with SHA-256 verification. Those files are the
+  pre-migration record and are no longer read or written by the application.
 
-- `npm run backup` copies every `data/*.json` file to `backups/<timestamp>/`,
-  **verifies each copy against a SHA-256 checksum**, and writes a
-  `MANIFEST.json` recording the digests.
-- The script is **additive only** — it reads `data/` and writes a new folder. It
-  can never overwrite live data.
-- **Restore is deliberately manual**, so no command exists that can destroy live
-  data by accident: stop the application, take a fresh backup, copy the files
-  over `data/`, verify against the manifest, restart.
-- `backups/` is git-ignored.
-
-Scheduling backups and copying them off the machine is a deployment
-responsibility (§20).
+Scheduling database backups is a deployment responsibility (§20).
 
 ### Repository hygiene
 
@@ -951,12 +1010,15 @@ These are **open**. They are not gaps in the implementation.
   called. This moves route files and was judged too invasive for a hardening
   pass.
 
-### 20.2 Deployment host
+### 20.2 Deployment host — **RESOLVED**
 
-- Must support a **single persistent Node process** with a **writable persistent
-  disk**.
-- **Vercel/serverless is unsupported** for the current architecture (§19).
-- The host has not been chosen.
+- **Vercel**, now supported: Supabase holds all state, so the application is
+  stateless (§19).
+- Both environment variables must be set on the host, with
+  `SUPABASE_SERVICE_ROLE_KEY` **not** prefixed `NEXT_PUBLIC_`.
+- **Still open:** restricting who can reach a public URL, because there is no
+  per-user data scoping (§21). Registration is closed by default (§7); Vercel
+  Deployment Protection is the recommended additional guard.
 
 ### 20.3 First Git commit
 
@@ -967,31 +1029,54 @@ These are **open**. They are not gaps in the implementation.
 
 ### 20.4 Backup operations
 
-- `npm run backup` **exists and is verified**.
-- **Scheduling it and copying backups off the machine remains a deployment
-  responsibility.** No schedule is configured.
+- **Amended:** backups are now a **database** concern. Supabase provides them
+  automatically on paid plans; on the free plan they must be taken manually.
+- `npm run backup` now covers only the legacy JSON snapshot.
+- **Still open:** no database backup schedule is configured.
+
+### 20.5 Per-user data scoping
+
+- Every signed-in user sees all data. Registration is closed by default, so the
+  exposure is limited to accounts you create.
+- **Open:** whether to add ownership/visibility scoping. It is a substantial
+  change and outside the current specification.
 
 ---
 
-## 21. Known Limitations of JSON Storage
+## 21. Known Limitations
 
-**Accepted for this version.**
+**Amended.** The previous list described JSON-file constraints. Most are gone;
+what remains is architectural.
 
-1. **Single process only.** The write queue lives in memory. Two Node processes
-   would interleave read-modify-write cycles and lose data.
-2. **A writable, persistent disk is required.**
-3. **Individual writes are atomic; sequences are not.** A crash between two
-   related writes can leave partial state.
-4. **No transactions and no database-level referential integrity** — both are
-   enforced in application code.
-5. **Whole-file rewrite per change.** Suitable for hundreds of records; it will
-   degrade in the tens of thousands.
-6. **All signed-in users see all data.** Task assignment records who is working
-   on something; it is not access control.
-7. **Backups are not automatic.**
+### Resolved by the Supabase migration
 
-**Assessment:** safe for the current scope — a single user, on one machine, with
-a persistent disk. Not safe for multi-instance or serverless hosting.
+| Former limitation | Status |
+|---|---|
+| Single process only | **Resolved** — Postgres handles concurrency |
+| Writable persistent disk required | **Resolved** — no disk state |
+| No transactions or referential integrity | **Resolved** — foreign keys enforced by the database |
+| Whole-file rewrite per change | **Resolved** |
+| Cannot deploy to serverless | **Resolved** |
+| Backups not automatic | **Partly** — a database concern now (§19) |
+
+### Still true
+
+1. **No per-user data scoping.** Every signed-in user sees every project, task
+   and work log. Task assignment records who is working on something; it is not
+   access control. Registration is closed by default (§7), which removes the
+   main exposure, but anyone holding an account sees everything.
+2. **No rate limiting on login.** bcrypt at cost 12 makes guessing slow but not
+   impossible. Best handled at a reverse proxy.
+3. **Multi-statement sequences are not transactional.** Related writes are
+   issued separately, so a failure between them can leave partial state.
+   Individual statements are atomic.
+4. **Spreadsheet formula injection is not guarded.** User-supplied text is
+   written verbatim into Excel cells; a value beginning `=`, `+`, `-` or `@`
+   is interpreted as a formula by Excel.
+
+**Assessment:** the storage architecture is now suitable for real deployment,
+including serverless. The remaining items are product and hardening decisions,
+not storage constraints.
 
 ---
 
@@ -1026,14 +1111,14 @@ verification is manual, evidence-based, and recorded.
 
 ## 23. Scope of This Foundation
 
-**In scope and implemented:** projects, tasks, work logs, task assignment,
+**In scope and implemented:** Supabase persistence, projects, tasks, work logs, task assignment,
 search/filter/sort, dashboard, activity history, Excel export, authentication
 and sessions, appearance and password settings, loading/error/not-found/empty
 states, backup, and deployment documentation.
 
 **Deferred, deliberately:**
 
-- Supabase or any database migration (§6)
+
 - Ownership, visibility scoping, roles, and permissions (§10)
 - Email verification, password reset, OAuth, 2FA (§7)
 - Default task priority and status preferences (§14)
@@ -1041,6 +1126,10 @@ states, backup, and deployment documentation.
 - Assignee on the dashboard (§10)
 - An automated test framework (§22)
 
-**Not to be changed without a new decision:** the JSON storage architecture, the
-authentication and session model, ExcelJS and its accepted advisory, the 1024px
-task-table breakpoint, and the single-implementation rule for task filtering.
+**Not to be changed without a new decision:** the Supabase storage architecture
+and its service-role/RLS access model, the authentication and session model,
+ExcelJS and its accepted advisory, the 1024px task-table breakpoint, and the
+single-implementation rule for task filtering.
+
+**Completed since the original foundation:** the migration from local JSON files
+to Supabase PostgreSQL (§6), and closing open registration (§7).

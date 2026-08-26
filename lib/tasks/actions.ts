@@ -235,7 +235,7 @@ export async function deleteTaskAction(id: string): Promise<void> {
   const task = await tasks.find(id);
   if (!task) return;
 
-  await workLogs.removeWhere((log) => log.taskId === id);
+  await workLogs.removeWhere({ taskId: id });
   await tasks.remove(id);
 
   await recordActivity({

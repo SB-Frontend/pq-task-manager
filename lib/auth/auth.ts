@@ -3,6 +3,10 @@ import "server-only";
 import { redirect } from "next/navigation";
 
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
+import {
+  isRegistrationOpen,
+  REGISTRATION_CLOSED_MESSAGE,
+} from "@/lib/auth/registration";
 import { createSession, destroySession, getSession } from "@/lib/auth/session";
 import { users } from "@/lib/storage/users";
 import type { PublicUser, User } from "@/types";
@@ -31,7 +35,12 @@ export async function registerUser(input: {
   email: string;
   password: string;
 }): Promise<AuthResult> {
-  const existing = await users.findOneWhere((user) => user.email === input.email);
+  // Checked here, not only in the UI, so a direct action call cannot bypass it.
+  if (!(await isRegistrationOpen())) {
+    return { ok: false, message: REGISTRATION_CLOSED_MESSAGE };
+  }
+
+  const existing = await users.findOneWhere({ email: input.email });
 
   if (existing) {
     return {
@@ -66,7 +75,7 @@ export async function loginUser(input: {
 }): Promise<AuthResult> {
   const failure: AuthResult = { ok: false, message: "Invalid email or password." };
 
-  const user = await users.findOneWhere((candidate) => candidate.email === input.email);
+  const user = await users.findOneWhere({ email: input.email });
   if (!user) return failure;
 
   const valid = await verifyPassword(input.password, user.passwordHash);

@@ -3,7 +3,10 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
 
-import { sessions } from "@/lib/storage/sessions";
+import {
+  deleteExpiredSessions as deleteExpiredSessionRows,
+  sessions,
+} from "@/lib/storage/sessions";
 import type { Session } from "@/types";
 
 const COOKIE_NAME = "session";
@@ -87,7 +90,12 @@ export async function getSession(): Promise<Session | null> {
   return session;
 }
 
-/** Housekeeping: drops sessions that are past their expiry. */
+/**
+ * Housekeeping: drops sessions that are past their expiry.
+ *
+ * A comparison rather than an equality match, so the storage layer runs it as
+ * a query instead of loading every session.
+ */
 export async function deleteExpiredSessions(): Promise<number> {
-  return sessions.removeWhere(isExpired);
+  return deleteExpiredSessionRows();
 }

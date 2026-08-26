@@ -53,7 +53,7 @@ export async function listWorkLogs(): Promise<WorkLogWithContext[]> {
 export async function listWorkLogsForTask(taskId: string): Promise<WorkLog[]> {
   await requireUser();
 
-  const own = await workLogs.findWhere((log) => log.taskId === taskId);
+  const own = await workLogs.findWhere({ taskId });
   return own.sort(byNewest);
 }
 

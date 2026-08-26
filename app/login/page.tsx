@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import AuthCard from "@/components/auth/AuthCard";
 import LoginForm from "@/components/auth/LoginForm";
 import { getCurrentUser } from "@/lib/auth/auth";
+import { isRegistrationOpen } from "@/lib/auth/registration";
 
 export const metadata = { title: "Login" };
 
@@ -12,7 +13,7 @@ export default async function LoginPage() {
 
   return (
     <AuthCard title="Sign in" description="Welcome back.">
-      <LoginForm />
+      <LoginForm registrationOpen={await isRegistrationOpen()} />
     </AuthCard>
   );
 }
