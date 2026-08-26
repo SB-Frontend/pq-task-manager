@@ -1,0 +1,986 @@
+# Personal Project Task Manager
+
+## 1. Project Goal
+
+Build a small, clean, fast personal project/task management application for a frontend developer.
+
+The application is primarily for tracking work across multiple projects.
+
+I receive development tasks, work on them over a period of time, complete them, and need to maintain a clear record of:
+
+* What project the task belongs to
+* What I need to do
+* What I am currently working on
+* What is pending
+* What has been completed
+* What changes/work were performed
+* How much time was estimated
+* How much time was actually spent
+* When the task was started and completed
+
+The application should remain intentionally small and simple.
+
+Do NOT turn this into Jira, Linear, Trello, or a complex enterprise project-management application.
+
+The primary goal is personal work tracking.
+
+---
+
+# 2. Core Concept
+
+The application hierarchy should be:
+
+Project
+└── Tasks
+└── Work Logs
+
+A project contains multiple tasks.
+
+Each task belongs to exactly one project.
+
+A task can have multiple work-log entries describing what was done during different work sessions.
+
+Example:
+
+Project:
+"Company Website"
+
+Task:
+"Implement responsive navigation"
+
+Status:
+"In Progress"
+
+Work logs:
+
+* 24 Aug — Created navigation component
+* 25 Aug — Added mobile menu
+* 26 Aug — Fixed tablet responsive issues
+
+---
+
+# 3. Recommended Technology
+
+Use a modern, simple, production-ready frontend stack.
+
+Preferred:
+
+* Next.js
+* TypeScript
+* Tailwind CSS
+* React
+* Reusable component architecture
+
+Before implementing anything:
+
+1. Inspect the existing repository.
+2. Check whether a project already exists.
+3. Check package.json and existing dependencies.
+4. Do not unnecessarily replace the existing setup.
+5. Reuse existing conventions where reasonable.
+6. If the repository is empty, create the appropriate Next.js application structure.
+
+The application should be deployable to Vercel.
+
+Use the simplest architecture that satisfies the requirements.
+
+Do not introduce unnecessary abstractions.
+
+---
+
+# 4. Data Persistence
+
+The application should support persistent data.
+
+First inspect the existing project and determine the simplest appropriate solution.
+
+For a single-user application, prefer a simple database/storage solution rather than building unnecessary backend infrastructure.
+
+The architecture should allow the storage layer to be replaced later if required.
+
+Do not hard-code application data into components.
+
+Keep data access separate from UI components.
+
+If a database is required, keep the schema small and clear.
+
+---
+
+# 5. Main Navigation
+
+Create a simple sidebar/navigation.
+
+Navigation:
+
+* Dashboard
+* Projects
+* Tasks
+* Settings
+
+Keep navigation minimal.
+
+Desktop:
+
+Sidebar + main content.
+
+Mobile:
+
+Collapsible navigation / mobile menu.
+
+---
+
+# 6. Dashboard
+
+Create a clean dashboard showing useful work information.
+
+Top-level statistics:
+
+* Total Projects
+* Active Projects
+* Pending Tasks
+* In Progress
+* Completed Tasks
+
+Also show:
+
+### Recent Tasks
+
+Display recently created or updated tasks.
+
+### Recent Activity
+
+Display recent work-log activity.
+
+Example:
+
+"Completed responsive navigation task"
+
+"Added API integration to authentication page"
+
+"Started dashboard redesign"
+
+### Task Summary
+
+Show a simple breakdown:
+
+* Pending
+* In Progress
+* Completed
+* Blocked
+
+Avoid unnecessary charts.
+
+If a small visual chart improves usability, use only one simple chart.
+
+---
+
+# 7. Project Management
+
+Create a Projects page.
+
+Display projects in a clean table or card layout.
+
+Each project should have:
+
+* Project name
+* Description
+* Status
+* Start date
+* Target date
+* Number of tasks
+* Completed tasks
+* Progress percentage
+
+Project statuses:
+
+* Active
+* Completed
+* Archived
+
+Actions:
+
+* View
+* Edit
+* Archive
+
+Primary action:
+
+"New Project"
+
+---
+
+# 8. Create Project
+
+Fields:
+
+### Project Name
+
+Required.
+
+### Client / Company
+
+Optional.
+
+### Description
+
+Optional textarea.
+
+### Start Date
+
+Optional.
+
+### Target Date
+
+Optional.
+
+### Status
+
+Default:
+
+Active
+
+Buttons:
+
+* Cancel
+* Create Project
+
+Use reusable form components.
+
+---
+
+# 9. Project Details
+
+When opening a project, show:
+
+## Project Header
+
+* Project name
+* Client/company
+* Description
+* Status
+* Start date
+* Target date
+
+## Progress
+
+Calculate:
+
+Completed Tasks / Total Tasks × 100
+
+Display a simple progress bar.
+
+## Project Tasks
+
+Display all tasks belonging to the project.
+
+Allow filtering:
+
+* All
+* Pending
+* In Progress
+* Completed
+* Blocked
+
+Allow sorting:
+
+* Recently updated
+* Priority
+* Status
+* Created date
+
+Primary action:
+
+"Add Task"
+
+---
+
+# 10. Task Model
+
+Each task should contain:
+
+* ID
+* Project ID
+* Title
+* Description
+* Status
+* Priority
+* Tags
+* Estimated hours
+* Actual hours
+* Created date
+* Updated date
+* Started date
+* Completed date
+
+Statuses:
+
+* Pending
+* In Progress
+* Completed
+* Blocked
+
+Priorities:
+
+* Low
+* Medium
+* High
+
+---
+
+# 11. Create/Edit Task
+
+Create a reusable task form.
+
+Fields:
+
+### Task Title
+
+Required.
+
+### Project
+
+Required.
+
+### Description
+
+Optional.
+
+### Status
+
+Default:
+
+Pending
+
+### Priority
+
+Default:
+
+Medium
+
+### Estimated Hours
+
+Optional.
+
+### Actual Hours
+
+Optional.
+
+### Tags
+
+Optional.
+
+### Start Date
+
+Optional.
+
+### Completion Date
+
+Optional.
+
+### Developer Notes
+
+Optional.
+
+Buttons:
+
+* Cancel
+* Save Task
+
+The same reusable form should be usable for:
+
+* Create task
+* Edit task
+
+Avoid creating duplicate forms.
+
+---
+
+# 12. Task Details
+
+Create a dedicated task detail view.
+
+Display:
+
+* Task title
+* Project
+* Status
+* Priority
+* Description
+* Estimated time
+* Actual time
+* Start date
+* Completion date
+* Tags
+* Developer notes
+
+Also show:
+
+## Work Log
+
+A task can contain multiple work-log entries.
+
+Each work-log entry should contain:
+
+* Date
+* Time spent
+* Description
+
+Example:
+
+24 Aug 2026
+
+2h 30m
+
+"Created reusable navigation component and added responsive mobile menu."
+
+Allow:
+
+* Add work log
+* Edit work log
+* Delete work log
+
+Actual time can optionally be calculated from work logs.
+
+---
+
+# 13. Task List
+
+Create a global Tasks page.
+
+Columns:
+
+* Task
+* Project
+* Status
+* Priority
+* Estimated
+* Actual
+* Updated
+* Actions
+
+Provide:
+
+### Search
+
+Search by:
+
+* Task title
+* Description
+* Project
+* Tags
+
+### Filters
+
+* Project
+* Status
+* Priority
+* Date
+
+### Sorting
+
+* Updated date
+* Created date
+* Priority
+* Status
+
+Keep the interface simple.
+
+Do not build advanced query builders.
+
+---
+
+# 14. Work Tracking
+
+The application should make it easy to record what happened during development.
+
+For example:
+
+Task:
+
+"Build profile page"
+
+Work logs:
+
+08/24
+
+1h 30m
+
+"Created initial UI structure."
+
+08/25
+
+2h
+
+"Connected profile API."
+
+08/26
+
+1h
+
+"Fixed mobile layout and validation."
+
+The user should be able to look at a task later and understand exactly what work was performed.
+
+---
+
+# 15. Excel Export
+
+This is an important feature.
+
+Provide an "Export Excel" action.
+
+Support:
+
+### Export All Tasks
+
+Export all tasks.
+
+### Export Project
+
+Export tasks belonging to the current project.
+
+### Export Filtered Tasks
+
+Export the currently filtered task list.
+
+Excel columns should include:
+
+* Project
+* Task
+* Description
+* Status
+* Priority
+* Tags
+* Estimated Hours
+* Actual Hours
+* Created Date
+* Started Date
+* Completed Date
+* Developer Notes
+
+If practical, include work-log information in a separate worksheet.
+
+Example workbook:
+
+Sheet 1:
+Tasks
+
+Sheet 2:
+Work Logs
+
+Use a reliable JavaScript Excel library.
+
+The exported file should have a useful filename such as:
+
+project-tasks-2026-08-24.xlsx
+
+---
+
+# 16. Useful Date/Time Features
+
+Display dates consistently.
+
+Use a readable format.
+
+Example:
+
+24 Aug 2026
+
+For work duration, use:
+
+2h 30m
+
+Avoid displaying unnecessary timestamps unless useful.
+
+---
+
+# 17. Task Status Behavior
+
+When a task changes to:
+
+### In Progress
+
+If no start date exists, optionally set the start date.
+
+### Completed
+
+Set completion date automatically if it is empty.
+
+Do not overwrite an existing manually entered date without confirmation.
+
+### Reopened
+
+If a completed task is moved back to In Progress, preserve the previous completion date/history if possible.
+
+Keep this behavior simple.
+
+---
+
+# 18. Activity History
+
+Maintain a lightweight activity history.
+
+Examples:
+
+* Project created
+* Task created
+* Task status changed
+* Task completed
+* Work log added
+* Task updated
+
+This does not need to become a full audit system.
+
+It should simply help answer:
+
+"What did I work on recently?"
+
+---
+
+# 19. UI / UX Direction
+
+The UI should be:
+
+* Clean
+* Minimal
+* Professional
+* Developer-focused
+* Fast
+* Responsive
+* Easy to scan
+
+Think more like a lightweight internal developer tool than a consumer productivity app.
+
+Use:
+
+* Clear typography
+* Good spacing
+* Simple cards
+* Clean tables
+* Subtle borders
+* Small status badges
+* Clear primary actions
+
+Avoid:
+
+* Excessive gradients
+* Huge hero sections
+* Decorative illustrations
+* Excessive animations
+* Complex dashboards
+* Unnecessary modals
+
+The application should feel similar to a simplified Linear-style developer tool, but do not copy Linear's UI.
+
+---
+
+# 20. Reusable Components
+
+Create reusable components where they genuinely reduce duplication.
+
+Potential components:
+
+* AppShell
+* Sidebar
+* TopBar
+* PageHeader
+* Button
+* Input
+* Textarea
+* Select
+* DateInput
+* SearchInput
+* Modal
+* ConfirmDialog
+* StatusBadge
+* PriorityBadge
+* ProgressBar
+* DataTable
+* EmptyState
+* LoadingState
+* ErrorState
+* ProjectCard
+* TaskForm
+* ProjectForm
+* WorkLogForm
+* TaskFilters
+* ExportButton
+
+Do not over-engineer the component system.
+
+A component should be reusable because it is actually shared.
+
+---
+
+# 21. Forms
+
+Forms should have:
+
+* Clear labels
+* Required field indicators
+* Validation
+* Helpful error messages
+* Loading state
+* Disabled submit state while saving
+* Success feedback
+* Error feedback
+
+Do not make every field a complicated abstraction.
+
+Keep forms readable and maintainable.
+
+---
+
+# 22. Empty States
+
+Create useful empty states.
+
+Example:
+
+No projects yet.
+
+"Create your first project to start tracking your work."
+
+Button:
+
+"Create Project"
+
+For a project with no tasks:
+
+"No tasks yet."
+
+Button:
+
+"Add Task"
+
+---
+
+# 23. Responsive Design
+
+The application must work on:
+
+* Desktop
+* Laptop
+* Tablet
+* Mobile
+
+Desktop is the primary target.
+
+Tables should remain usable on smaller screens.
+
+Do not simply allow the entire page to overflow horizontally if a better responsive layout is possible.
+
+---
+
+# 24. Settings
+
+Keep Settings extremely small for v1.
+
+Include only useful preferences such as:
+
+* Theme: Light / Dark / System
+* Default task priority
+* Default task status
+
+Do not build unnecessary account settings.
+
+---
+
+# 25. Authentication
+
+For v1 this is a personal application.
+
+Do not implement authentication unless the existing project or deployment architecture requires it.
+
+If authentication is added later, it should be treated as a separate feature.
+
+---
+
+# 26. Search
+
+Global task search should be fast and simple.
+
+Search:
+
+* Task title
+* Description
+* Project
+* Tags
+
+Show matching tasks immediately.
+
+---
+
+# 27. Data Safety
+
+Do not silently delete projects or tasks.
+
+For destructive actions:
+
+Show confirmation.
+
+Example:
+
+"Delete this task?"
+
+"This action cannot be undone."
+
+For projects, prefer Archive over Delete.
+
+---
+
+# 28. Architecture Requirements
+
+Keep the codebase organized.
+
+Suggested structure:
+
+app/
+components/
+lib/
+types/
+hooks/
+services/
+
+Exact structure may be adjusted based on the existing repository.
+
+Keep:
+
+* UI components separate from data logic
+* Types centralized where appropriate
+* Database/storage access separated from UI
+* Export functionality isolated
+* Reusable forms shared between create/edit flows
+
+Avoid putting all application logic into one large page component.
+
+---
+
+# 29. Important Development Rules
+
+Before writing code:
+
+1. Inspect the repository.
+2. Understand the current stack.
+3. Identify existing components and conventions.
+4. Create a short implementation plan.
+5. Identify the smallest set of files that need to change.
+6. Then implement.
+
+Do not rewrite unrelated code.
+
+Do not install dependencies unless they are actually required.
+
+Do not create unnecessary files.
+
+Do not introduce unnecessary architecture.
+
+Do not implement features that are not listed here unless they are required for correctness.
+
+If there is a better technical approach than the one specified here, explain it briefly before making a major architectural change.
+
+---
+
+# 30. Development Phases
+
+Implement in phases.
+
+## Phase 1 — Foundation
+
+* Application shell
+* Sidebar
+* Top bar
+* Routing
+* Base styling
+* Reusable UI primitives
+
+## Phase 2 — Projects
+
+* Project list
+* Create project
+* Edit project
+* Project details
+* Project progress
+
+## Phase 3 — Tasks
+
+* Task list
+* Create task
+* Edit task
+* Task details
+* Filters
+* Search
+* Status management
+
+## Phase 4 — Work Logs
+
+* Add work log
+* Edit work log
+* Delete work log
+* Task activity
+* Actual time calculation
+
+## Phase 5 — Dashboard
+
+* Project statistics
+* Task statistics
+* Recent tasks
+* Recent activity
+
+## Phase 6 — Excel Export
+
+* Export all tasks
+* Export project tasks
+* Export filtered tasks
+* Tasks worksheet
+* Work Logs worksheet
+
+## Phase 7 — Polish
+
+* Responsive design
+* Loading states
+* Empty states
+* Error handling
+* Confirmation dialogs
+* Accessibility
+* Final UI cleanup
+
+---
+
+# 31. Definition of Done
+
+The application is complete when I can:
+
+1. Create a project.
+2. Open a project.
+3. Create tasks under that project.
+4. Set task status.
+5. Set task priority.
+6. Track estimated and actual time.
+7. Add work logs.
+8. Record what changes I made.
+9. See pending tasks.
+10. See tasks currently in progress.
+11. See completed tasks.
+12. Search tasks.
+13. Filter tasks.
+14. View project progress.
+15. See recent activity.
+16. Export tasks to Excel.
+17. Export work logs.
+18. Use the application on desktop and mobile.
+19. Deploy the application to Vercel if the selected architecture supports it.
+
+---
+
+# 32. Important Product Principle
+
+Keep asking:
+
+"Does this feature help a frontend developer understand what they worked on, what is pending, and what they completed?"
+
+If the answer is no, do not add the feature to v1.
+
+The goal is a small personal work tracker, not a complete project-management platform.
+
+Start by inspecting the repository and proposing the implementation plan before making large changes.

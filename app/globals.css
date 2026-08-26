@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --background: #f1f5f9;
+  --foreground: #0f172a;
+  --muted: #64748b;
+  /* Deep enough to separate a white card from the page and to make a card
+     edge visible; still a subtle hairline, per specification section 19. */
+  --border: #cbd5e1;
+  --card: #ffffff;
+}
+
+/* System preference, unless an explicit light choice overrides it. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --background: #0b0f19;
+    --foreground: #e6e8ee;
+    --muted: #94a3b8;
+    --border: #1e293b;
+    --card: #111827;
+  }
+}
+
+/* An explicit choice always wins over the system preference. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #0b0f19;
+  --foreground: #e6e8ee;
+  --muted: #94a3b8;
+  --border: #1e293b;
+  --card: #111827;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-card: var(--card);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
