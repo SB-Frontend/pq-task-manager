@@ -3,26 +3,17 @@ import { redirect } from "next/navigation";
 import AuthCard from "@/components/auth/AuthCard";
 import RegisterForm from "@/components/auth/RegisterForm";
 import { getCurrentUser } from "@/lib/auth/auth";
-import {
-  isRegistrationOpen,
-  REGISTRATION_CLOSED_MESSAGE,
-} from "@/lib/auth/registration";
-import ButtonLink from "@/components/ui/ButtonLink";
+import { isRegistrationOpen } from "@/lib/auth/registration";
 
 export const metadata = { title: "Register" };
 
 export default async function RegisterPage() {
   if (await getCurrentUser()) redirect("/app");
 
-  if (!(await isRegistrationOpen())) {
-    return (
-      <AuthCard title="Registration closed" description={REGISTRATION_CLOSED_MESSAGE}>
-        <ButtonLink href="/login" fullWidth>
-          Back to sign in
-        </ButtonLink>
-      </AuthCard>
-    );
-  }
+  // Closed: send people to sign in rather than rendering a form they cannot
+  // use. The server action is guarded independently, so this is presentation,
+  // not the security boundary.
+  if (!(await isRegistrationOpen())) redirect("/login");
 
   return (
     <AuthCard title="Create account" description="Start tracking your work.">

@@ -29,17 +29,19 @@ export type AuthResult =
   | { ok: true; user: PublicUser }
   | { ok: false; message: string; field?: "email" };
 
-/** Creates an account and logs the new user straight in. */
-export async function registerUser(input: {
+/**
+ * Creates an account. Does **not** sign anyone in.
+ *
+ * This function performs no authorisation of its own - every caller must decide
+ * who is allowed to reach it. Today there are exactly two: self-registration
+ * (guarded by `isRegistrationOpen`) and owner-initiated creation from Settings
+ * (guarded by `isOwner`).
+ */
+export async function createUserAccount(input: {
   name: string;
   email: string;
   password: string;
 }): Promise<AuthResult> {
-  // Checked here, not only in the UI, so a direct action call cannot bypass it.
-  if (!(await isRegistrationOpen())) {
-    return { ok: false, message: REGISTRATION_CLOSED_MESSAGE };
-  }
-
   const existing = await users.findOneWhere({ email: input.email });
 
   if (existing) {
@@ -59,9 +61,25 @@ export async function registerUser(input: {
     updatedAt: now,
   });
 
-  await createSession(user.id);
-
   return { ok: true, user: toPublicUser(user) };
+}
+
+/** Self-registration: creates an account and signs the new user straight in. */
+export async function registerUser(input: {
+  name: string;
+  email: string;
+  password: string;
+}): Promise<AuthResult> {
+  // Checked here, not only in the UI, so a direct action call cannot bypass it.
+  if (!(await isRegistrationOpen())) {
+    return { ok: false, message: REGISTRATION_CLOSED_MESSAGE };
+  }
+
+  const result = await createUserAccount(input);
+  if (!result.ok) return result;
+
+  await createSession(result.user.id);
+  return result;
 }
 
 /**

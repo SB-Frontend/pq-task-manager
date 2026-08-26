@@ -3,24 +3,32 @@ import "server-only";
 import { users } from "@/lib/storage/users";
 
 /**
- * Whether a new account may be created.
+ * Whether a new account may be created through public self-registration.
  *
- * Registration is **closed by default**. It opens only when:
+ * Resolution order — an explicit setting always wins:
  *
- *   1. No account exists yet — so a fresh deployment can be bootstrapped; or
- *   2. ALLOW_REGISTRATION is explicitly set to "true" — used deliberately and
- *      temporarily when another person needs an account.
+ *   1. `ALLOW_REGISTRATION=true`  → open. Deliberate, for development or an
+ *      emergency where no owner account can sign in.
+ *   2. `ALLOW_REGISTRATION=false` → closed, unconditionally. Nothing else is
+ *      considered, not even an empty database.
+ *   3. Unset → closed, unless **no account exists yet**, so a fresh deployment
+ *      can be bootstrapped by its first user.
  *
- * Without this, a publicly reachable deployment lets anyone register, and
- * because the application has no per-user data scoping, a new account can read
- * and edit everything.
+ * This gates public registration only. The owner's Settings → Accounts flow is
+ * governed by `isOwner()` and is deliberately unaffected: an owner can always
+ * add accounts, however this is configured.
+ *
+ * The gate matters because the application has no per-user data scoping — any
+ * account can read and edit everything.
  */
 export async function isRegistrationOpen(): Promise<boolean> {
-  if (process.env.ALLOW_REGISTRATION?.trim().toLowerCase() === "true") {
-    return true;
-  }
+  const setting = process.env.ALLOW_REGISTRATION?.trim().toLowerCase();
 
-  // Bootstrap: the very first account on an empty deployment.
+  if (setting === "true") return true;
+
+  // An explicit "false" is authoritative and disables the bootstrap path too.
+  if (setting === "false") return false;
+
   const existing = await users.list();
   return existing.length === 0;
 }

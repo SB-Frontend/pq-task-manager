@@ -381,15 +381,26 @@ permissions are **Deferred** — excluded by specification §17 for v1.
 
 ### Registration
 
-**Amended — registration is now closed by default.**
+**Amended — public registration is now closed by default, and `/register`
+redirects to `/login` when closed.**
 
 Previously anyone reaching `/register` could create an account. Combined with
 the absence of per-user data scoping (§21), a public deployment would have let
-any visitor read and edit everything. Registration is now open only when:
+any visitor read and edit everything. Public registration resolves in this order, an explicit setting always winning:
 
-1. **No account exists yet** — so a fresh deployment can be bootstrapped; or
-2. **`ALLOW_REGISTRATION=true`** is explicitly set, used deliberately and
-   temporarily when another person needs an account.
+1. **`ALLOW_REGISTRATION=true`** → open. Deliberate, for development or an
+   emergency where no owner account can sign in.
+2. **`ALLOW_REGISTRATION=false`** → closed, unconditionally. Recommended in
+   production; the bootstrap path below is **not** consulted.
+3. **Unset** → closed, unless no account exists yet, so a fresh deployment can
+   be bootstrapped by its first user.
+
+When closed, `/register` **redirects to `/login`** rather than rendering a form
+that cannot be used, and the login page shows no register link. Both are
+presentation: the security boundary is the check inside `registerUser()`.
+
+The owner's Settings → Accounts flow is governed by `isOwner()` and is
+**unaffected** by this setting.
 
 The check lives in `isRegistrationOpen()` and is enforced inside
 `registerUser()` — the single function that inserts a user — **before** the
@@ -399,6 +410,26 @@ a closed state and the login page hides the register link.
 **Verified:** with one account present and no flag set, `/register` renders
 "Registration closed", the login page shows zero register links, and no account
 was created by an attempted submission.
+
+### Instance owner
+
+**The first account created owns the instance.** Ownership is derived from the
+oldest `created_at`, so it needs no configuration and cannot be mistyped into
+locking everyone out the way an environment variable could.
+
+The owner has exactly **one** additional capability: adding accounts from
+Settings (§14). Nothing else differs. This stays inside specification §17, which
+excludes roles and permissions — there is no role column, no permission model,
+and no second privilege.
+
+`createUserAccount()` performs no authorisation of its own; each caller decides
+who may reach it. Self-registration guards with `isRegistrationOpen()`, and the
+Settings path guards with `isOwner()` **before** any write. Accounts created by
+the owner are **not** signed in — the owner keeps their own session.
+
+**Verified:** a non-owner's Settings page contains no Accounts section and does
+not leak other accounts' emails; the owner sees the account list and can create
+an account; the new account has no session; and password mismatch is rejected.
 
 ---
 
@@ -740,6 +771,16 @@ sessions, or storage. Theme and account state cannot become entangled.
 - No activity entry is recorded for a password change — the activity history is
   about work, not security events.
 
+### Accounts (owner only)
+
+The owner sees an additional **Accounts** section listing every account with an
+"Owner" marker, plus a form to add one. It reuses the registration schema, so
+password rules cannot diverge from self-registration, and the existing hashing
+helpers.
+
+The copy states plainly that anyone with an account can see and edit everything
+— adding a person is a meaningful act, not a limited invitation.
+
 ### Deliberately excluded
 
 Default task priority and default task status are listed in specification §24
@@ -896,7 +937,7 @@ gradient was introduced.
 
 | State | Implementation |
 |---|---|
-| **Loading** | `app/app/loading.tsx` renders `LoadingState`; Next applies it to every route under `/app`. |
+| **Loading** | **Removed.** See the note below. |
 | **Error** | `app/app/error.tsx` renders `ErrorState` with a working retry. |
 | **Not found** | `not-found.tsx` for each dynamic route — projects, tasks, work logs. |
 | **Empty** | Graded empty states throughout, distinguishing "nothing exists yet" from "nothing matches your filters". |
@@ -995,9 +1036,15 @@ Scheduling database backups is a deployment responsibility (§20).
 
 These are **open**. They are not gaps in the implementation.
 
-### 20.1 Loading state vs exact HTTP 404 semantics
+### 20.1 Loading state vs exact HTTP 404 semantics — **RESOLVED**
 
-- **Current choice:** keep `app/app/loading.tsx`.
+- **Outcome:** `app/app/loading.tsx` was **removed**, because after the Supabase
+  migration it left every `/app` route stuck on the loading fallback in the
+  browser (§18). Removing it also restored true **404** responses for
+  `notFound()`, so both costs disappeared together.
+- Historical detail follows.
+
+- **Former choice:** keep `app/app/loading.tsx`.
 - **Known consequence:** `loading.tsx` wraps the segment in Suspense, so Next
   flushes HTTP 200 before the page runs `notFound()`. In-route not-found
   responses therefore return **HTTP 200** instead of 404. Confirmed in the
