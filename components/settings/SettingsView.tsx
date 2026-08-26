@@ -1,5 +1,6 @@
 import AppearanceForm from "@/components/settings/AppearanceForm";
 import PasswordForm from "@/components/settings/PasswordForm";
+import UsersSection from "@/components/settings/UsersSection";
 import Button from "@/components/ui/Button";
 import PageHeader from "@/components/ui/PageHeader";
 import { logoutAction } from "@/lib/auth/actions";
@@ -27,10 +28,16 @@ function Section({
 export default function SettingsView({
   user,
   theme,
+  users,
+  ownerId,
 }: {
   user: PublicUser;
   theme: Theme;
+  /** Present only when the signed-in user owns the instance. */
+  users?: PublicUser[];
+  ownerId?: string | null;
 }) {
+  const isOwner = users !== undefined;
   return (
     <div className="space-y-6">
       <PageHeader title="Settings" description="Your appearance and account." />
@@ -61,6 +68,15 @@ export default function SettingsView({
       >
         <PasswordForm />
       </Section>
+
+      {isOwner && (
+        <Section
+          title="Accounts"
+          description="You own this instance, so you can add accounts."
+        >
+          <UsersSection users={users} ownerId={ownerId ?? null} />
+        </Section>
+      )}
 
       <Section title="Session" description="You are signed in on this device.">
         <form action={logoutAction}>

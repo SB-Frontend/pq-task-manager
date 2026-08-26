@@ -27,7 +27,7 @@ The application runs at http://localhost:3000.
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL. Safe in the browser. |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Server only.** Bypasses RLS and grants full database access. |
-| `ALLOW_REGISTRATION` | Optional. `true` temporarily opens registration. See below. |
+| `ALLOW_REGISTRATION` | Optional. `false` disables public registration outright (**recommended in production**); `true` enables it deliberately. See below. |
 
 `SUPABASE_SERVICE_ROLE_KEY` must **never** carry a `NEXT_PUBLIC_` prefix and must
 never be committed. Find it in Supabase under Project Settings → API →
@@ -69,18 +69,33 @@ client component importing it is a build failure, not a runtime bug.
 
 ## Registration
 
-**Registration is closed by default.** It is open only when:
+**Public registration is closed by default.** An explicit setting always wins:
 
-1. No account exists yet, so a fresh deployment can be bootstrapped, or
-2. `ALLOW_REGISTRATION=true` is explicitly set.
+1. `ALLOW_REGISTRATION=true` → open. Deliberate, for development or an
+   emergency where no owner account can sign in.
+2. `ALLOW_REGISTRATION=false` → closed, unconditionally. **Recommended in
+   production.** Nothing else is considered, not even an empty database.
+3. Unset → closed, unless no account exists yet, so a fresh deployment can be
+   bootstrapped by its first user.
+
+When closed, `/register` **redirects to `/login`** and the login page shows no
+register link. The owner's Settings → Accounts flow is unaffected either way.
 
 This matters because the application has **no per-user data scoping** — every
 signed-in user sees every project, task and work log. Task assignment records
 who is working on something; it is not access control. Leaving registration open
 on a public URL would let anyone read and edit everything.
 
-To add someone: set `ALLOW_REGISTRATION=true`, have them register, then remove
-the variable and redeploy.
+### Adding people
+
+**The first account created owns the instance.** The owner gets one extra
+capability: an **Accounts** section in Settings that lists existing accounts and
+can create new ones. The new account is not signed in — share the password with
+them securely.
+
+`ALLOW_REGISTRATION=true` remains an emergency route (for example if no owner
+account can sign in), but Settings is the normal way to add someone. For
+production, set `ALLOW_REGISTRATION=false` explicitly.
 
 ## Scripts
 

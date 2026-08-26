@@ -33,3 +33,18 @@ export async function listAssignableUsers(): Promise<PublicUser[]> {
   const all = await users.list();
   return all.sort((a, b) => a.name.localeCompare(b.name)).map(toPublicUser);
 }
+
+/**
+ * Every account, for the owner's Settings view.
+ *
+ * Only ever called behind an owner check; it returns public users, so no
+ * password hash can be exposed regardless.
+ */
+export async function listUsers(): Promise<PublicUser[]> {
+  await requireUser();
+
+  const all = await users.list();
+  return all
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map(toPublicUser);
+}
