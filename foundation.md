@@ -137,7 +137,7 @@ Supabase PostgreSQL
   which a Server Action cannot provide.
 - Business calculations live in the domain modules, not in components.
 
-**Verified:** 18 modules carry `server-only`; a scan of every `"use client"`
+**Verified:** 21 modules carry `server-only`; a scan of every `"use client"`
 file's imports finds no client component importing a server-only module. Zod and
 all validation schemas remain server-side.
 
@@ -148,9 +148,9 @@ app/            Routes and layouts (App Router)
 components/     UI components (ui, layout, auth, projects, tasks, work-logs,
                 dashboard, settings)
 lib/            Domain modules, storage layer, helpers
-lib/storage/    JSON storage layer (server-only)
+lib/storage/    Supabase data layer (server-only)
 types/          Shared TypeScript types
-scripts/        Maintenance scripts (backup)
+scripts/        Maintenance scripts (backup, Supabase migration)
 supabase/       schema.sql
 data/           Legacy JSON snapshot (git-ignored, no longer used at runtime)
 backups/        Local backups of the legacy snapshot (git-ignored)
@@ -989,7 +989,7 @@ required any more.
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Public; safe in the browser |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Server only.** Bypasses RLS. Never `NEXT_PUBLIC_`, never committed |
-| `ALLOW_REGISTRATION` | Optional; `true` temporarily opens registration |
+| `ALLOW_REGISTRATION` | Optional. `false` closes public registration unconditionally (recommended in production); `true` opens it deliberately; unset closes it unless no account exists. See §7 |
 
 **Verified:** the service-role key appears **zero** times across the 36 files of
 the built client bundle, and the string `SERVICE_ROLE` appears in none of them.
