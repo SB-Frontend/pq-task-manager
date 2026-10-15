@@ -9,7 +9,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import PageHeader from "@/components/ui/PageHeader";
 import ProgressBar from "@/components/ui/ProgressBar";
 import StatusBadge from "@/components/ui/StatusBadge";
-import { requireUser } from "@/lib/auth/auth";
+import { canCreateTasks, canManageProjects, requireViewer } from "@/lib/auth/scope";
 import { formatDate, formatDuration } from "@/lib/format";
 import { getProject } from "@/lib/projects/queries";
 import { hasActiveFilters, parseTaskQuery } from "@/lib/tasks/filters";
@@ -34,9 +34,12 @@ export default async function ProjectDetailPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  await requireUser();
+  const viewer = await requireViewer();
+  const canManage = canManageProjects(viewer);
+  const canAddTask = canCreateTasks(viewer);
 
-  // Covers both a malformed id and a project that does not exist.
+  // Covers a malformed id, a project that does not exist, and a project the
+  // viewer has no task in — all three are simply "not found".
   const project = await getProject((await params).id);
   if (!project) notFound();
 
@@ -80,10 +83,12 @@ export default async function ProjectDetailPage({
               </a>
             )}
 
-            <ButtonLink href={`/app/projects/${project.id}/edit`} variant="secondary">
-              Edit
-            </ButtonLink>
-            {!isArchived && (
+            {canManage && (
+              <ButtonLink href={`/app/projects/${project.id}/edit`} variant="secondary">
+                Edit
+              </ButtonLink>
+            )}
+            {canManage && !isArchived && (
               <ArchiveProjectButton projectId={project.id} projectName={project.name} />
             )}
           </>
@@ -121,15 +126,19 @@ export default async function ProjectDetailPage({
 
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold">Tasks</h2>
+          <h2 className="text-sm font-semibold">
+            {canAddTask ? "Tasks" : "Your tasks"}
+          </h2>
 
-          <ButtonLink
-            href={`/app/tasks/new?projectId=${project.id}`}
-            variant="secondary"
-            size="sm"
-          >
-            Add Task
-          </ButtonLink>
+          {canAddTask && (
+            <ButtonLink
+              href={`/app/tasks/new?projectId=${project.id}`}
+              variant="secondary"
+              size="sm"
+            >
+              Add Task
+            </ButtonLink>
+          )}
         </div>
 
         {taskTotal > 0 && (
@@ -142,15 +151,22 @@ export default async function ProjectDetailPage({
         )}
 
         {taskTotal === 0 ? (
-          <EmptyState
-            title="No tasks yet"
-            description="Add the first task to start tracking work on this project."
-            action={
-              <ButtonLink href={`/app/tasks/new?projectId=${project.id}`}>
-                Add Task
-              </ButtonLink>
-            }
-          />
+          canAddTask ? (
+            <EmptyState
+              title="No tasks yet"
+              description="Add the first task to start tracking work on this project."
+              action={
+                <ButtonLink href={`/app/tasks/new?projectId=${project.id}`}>
+                  Add Task
+                </ButtonLink>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="No tasks assigned to you"
+              description="Only tasks assigned to you appear in this project."
+            />
+          )
         ) : (
           /* Every task here belongs to this project, so the column is redundant. */
           <TaskList tasks={projectTasks} showProject={false} />

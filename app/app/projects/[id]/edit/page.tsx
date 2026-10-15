@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 
 import ProjectForm from "@/components/projects/ProjectForm";
 import PageHeader from "@/components/ui/PageHeader";
-import { requireUser } from "@/lib/auth/auth";
+import { canManageProjects, requireViewer } from "@/lib/auth/scope";
 import { updateProjectAction } from "@/lib/projects/actions";
 import { getProject } from "@/lib/projects/queries";
 
@@ -13,7 +13,9 @@ export default async function EditProjectPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireUser();
+  const viewer = await requireViewer();
+  // Owner-only, reported as missing rather than forbidden.
+  if (!canManageProjects(viewer)) notFound();
 
   const { id } = await params;
   const project = await getProject(id);

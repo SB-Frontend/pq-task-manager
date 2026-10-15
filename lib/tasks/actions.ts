@@ -5,7 +5,14 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { recordActivity } from "@/lib/activity";
-import { requireUser } from "@/lib/auth/auth";
+import {
+  canCreateTasks,
+  canDeleteTasks,
+  canEditTask,
+  canReassignTasks,
+  NOT_ALLOWED,
+  requireViewer,
+} from "@/lib/auth/scope";
 import { formatDate, today } from "@/lib/format";
 import { projects } from "@/lib/storage/projects";
 import { tasks } from "@/lib/storage/tasks";
@@ -97,11 +104,16 @@ async function recordAssignmentChange(
   });
 }
 
+/**
+ * Creating a task is owner-only: deciding what work exists, and who does it,
+ * is the owner's job. A member's list is made entirely of what they are given.
+ */
 export async function createTaskAction(
   _prevState: TaskFormState,
   formData: FormData,
 ): Promise<TaskFormState> {
-  await requireUser();
+  const viewer = await requireViewer();
+  if (!canCreateTasks(viewer)) return { message: NOT_ALLOWED.createTask };
 
   const parsed = taskSchema.safeParse(readTaskForm(formData));
 
@@ -139,16 +151,28 @@ export async function createTaskAction(
   redirect(`/app/tasks/${task.id}`);
 }
 
+/**
+ * A member may edit a task assigned to them, but may not decide where it lives
+ * or who holds it. Both of those are pinned to their stored values below rather
+ * than trusted from the form, so a forged or stale submission cannot move a
+ * task into another project or hand it to someone else.
+ */
 export async function updateTaskAction(
   id: string,
   _prevState: TaskFormState,
   formData: FormData,
 ): Promise<TaskFormState> {
-  await requireUser();
+  const viewer = await requireViewer();
 
   const existing = await tasks.find(id);
   if (!existing) {
     return { message: "This task no longer exists." };
+  }
+
+  // Stated plainly rather than disguised as "not found": the caller already
+  // holds the id, and a task reassigned away mid-edit deserves a real reason.
+  if (!canEditTask(viewer, existing)) {
+    return { message: NOT_ALLOWED.editTask };
   }
 
   const parsed = taskSchema.safeParse(readTaskForm(formData));
@@ -157,18 +181,28 @@ export async function updateTaskAction(
     return { fieldErrors: z.flattenError(parsed.error).fieldErrors };
   }
 
-  if (!(await projectExists(parsed.data.projectId))) {
+  // The project and the assignee are the owner's to set. For anyone else the
+  // submitted values are discarded in favour of what is already stored.
+  const input = canReassignTasks(viewer)
+    ? parsed.data
+    : {
+        ...parsed.data,
+        projectId: existing.projectId,
+        assigneeId: existing.assigneeId,
+      };
+
+  if (!(await projectExists(input.projectId))) {
     return { fieldErrors: { projectId: ["That project does not exist."] } };
   }
 
-  if (!(await assigneeIsValid(parsed.data.assigneeId))) {
+  if (!(await assigneeIsValid(input.assigneeId))) {
     return { fieldErrors: { assigneeId: ["That user does not exist."] } };
   }
 
   // Cleared optional fields are spread in as undefined, which removes them from
   // the stored record rather than leaving a stale value behind.
   const updated = await tasks.update(id, {
-    ...applyStatusDates(parsed.data, existing.status),
+    ...applyStatusDates(input, existing.status),
     updatedAt: new Date().toISOString(),
   });
 
@@ -230,7 +264,9 @@ async function recordTaskChange(before: Task, after: Task): Promise<void> {
  * Work logs belonging to the task go with it so no orphans are left behind.
  */
 export async function deleteTaskAction(id: string): Promise<void> {
-  await requireUser();
+  const viewer = await requireViewer();
+  // Owner-only, and void, so it refuses by doing nothing and not redirecting.
+  if (!canDeleteTasks(viewer)) return;
 
   const task = await tasks.find(id);
   if (!task) return;

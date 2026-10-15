@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { recordActivity } from "@/lib/activity";
-import { requireUser } from "@/lib/auth/auth";
+import { canSeeTask, NOT_ALLOWED, requireViewer } from "@/lib/auth/scope";
 import { formatDuration } from "@/lib/format";
 import { tasks } from "@/lib/storage/tasks";
 import { workLogs } from "@/lib/storage/work-logs";
@@ -38,11 +38,16 @@ function revalidateFor(taskId: string, projectId?: string) {
   if (projectId) revalidatePath(`/app/projects/${projectId}`);
 }
 
+/**
+ * Work logs follow their task: anyone who can see a task may log work against
+ * it, and nobody may log work against a task they cannot see. That is the whole
+ * rule, and it is checked on the server before the insert.
+ */
 export async function createWorkLogAction(
   _prevState: WorkLogFormState,
   formData: FormData,
 ): Promise<WorkLogFormState> {
-  await requireUser();
+  const viewer = await requireViewer();
 
   const parsed = workLogSchema.safeParse(readWorkLogForm(formData));
 
@@ -54,6 +59,10 @@ export async function createWorkLogAction(
   const task = await tasks.find(parsed.data.taskId);
   if (!task) {
     return { fieldErrors: { taskId: ["That task does not exist."] } };
+  }
+
+  if (!canSeeTask(viewer, task)) {
+    return { fieldErrors: { taskId: [NOT_ALLOWED.workLog] } };
   }
 
   const log = await workLogs.insert({
@@ -78,11 +87,18 @@ export async function updateWorkLogAction(
   _prevState: WorkLogFormState,
   formData: FormData,
 ): Promise<WorkLogFormState> {
-  await requireUser();
+  const viewer = await requireViewer();
 
   const existing = await workLogs.find(id);
   if (!existing) {
     return { message: "This work log no longer exists." };
+  }
+
+  // Both ends are checked: the task the log is on now, and the task it would
+  // move to. Neither may be a task the viewer cannot see.
+  const currentTask = await tasks.find(existing.taskId);
+  if (currentTask && !canSeeTask(viewer, currentTask)) {
+    return { message: NOT_ALLOWED.workLog };
   }
 
   const parsed = workLogSchema.safeParse(readWorkLogForm(formData));
@@ -94,6 +110,10 @@ export async function updateWorkLogAction(
   const task = await tasks.find(parsed.data.taskId);
   if (!task) {
     return { fieldErrors: { taskId: ["That task does not exist."] } };
+  }
+
+  if (!canSeeTask(viewer, task)) {
+    return { fieldErrors: { taskId: [NOT_ALLOWED.workLog] } };
   }
 
   const updated = await workLogs.update(id, parsed.data);
@@ -120,12 +140,15 @@ export async function updateWorkLogAction(
  * only the entry itself goes.
  */
 export async function deleteWorkLogAction(id: string): Promise<void> {
-  await requireUser();
+  const viewer = await requireViewer();
 
   const log = await workLogs.find(id);
   if (!log) return;
 
   const task = await tasks.find(log.taskId);
+  // Void action: refuses by doing nothing.
+  if (task && !canSeeTask(viewer, task)) return;
+
   await workLogs.remove(id);
 
   await recordActivity({

@@ -7,7 +7,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import PageHeader from "@/components/ui/PageHeader";
 import ProgressBar from "@/components/ui/ProgressBar";
 import StatusBadge from "@/components/ui/StatusBadge";
-import { requireUser } from "@/lib/auth/auth";
+import { canManageProjects, requireViewer } from "@/lib/auth/scope";
 import { getDashboardData } from "@/lib/dashboard/queries";
 import { formatDuration } from "@/lib/format";
 import type { TaskStatus } from "@/types";
@@ -46,23 +46,32 @@ function Section({
 }
 
 export default async function DashboardPage() {
-  const user = await requireUser();
+  const viewer = await requireViewer();
   const data = await getDashboardData();
 
-  // Nothing exists yet: a wall of zeros would say less than one sentence.
+  // Nothing to show: a wall of zeros would say less than one sentence. For the
+  // owner that means nothing exists yet; for a member it means nothing has been
+  // assigned to them.
   if (data.isEmpty) {
     return (
       <div className="space-y-6">
         <PageHeader
-          title={`Welcome, ${user.name}`}
+          title={`Welcome, ${viewer.name}`}
           description="Your project and task overview will appear here."
         />
 
-        <EmptyState
-          title="No projects yet"
-          description="Create your first project to start tracking work."
-          action={<ButtonLink href="/app/projects/new">Create Project</ButtonLink>}
-        />
+        {canManageProjects(viewer) ? (
+          <EmptyState
+            title="No projects yet"
+            description="Create your first project to start tracking work."
+            action={<ButtonLink href="/app/projects/new">Create Project</ButtonLink>}
+          />
+        ) : (
+          <EmptyState
+            title="Nothing assigned to you yet"
+            description="Your projects and tasks will appear here once the owner of this instance assigns you some work."
+          />
+        )}
       </div>
     );
   }

@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 
 import TaskForm from "@/components/tasks/TaskForm";
 import PageHeader from "@/components/ui/PageHeader";
-import { requireUser } from "@/lib/auth/auth";
+import { canReassignTasks, requireViewer } from "@/lib/auth/scope";
 import { updateTaskAction } from "@/lib/tasks/actions";
 import { getTask, listSelectableProjects } from "@/lib/tasks/queries";
 import { listAssignableUsers } from "@/lib/users/queries";
@@ -14,8 +14,10 @@ export default async function EditTaskPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireUser();
+  const viewer = await requireViewer();
 
+  // getTask already refuses a task assigned to somebody else, so reaching the
+  // edit form at all means the viewer may edit it.
   const { id } = await params;
   const task = await getTask(id);
   if (!task) notFound();
@@ -36,6 +38,10 @@ export default async function EditTaskPage({
           projects={projects}
           assignees={assignees}
           task={task}
+          // The project and assignee are the owner's to set. The action pins
+          // both to their stored values for anyone else, so this only keeps the
+          // form honest about what it can actually change.
+          lockPlacement={!canReassignTasks(viewer)}
           submitLabel="Save changes"
           cancelHref={`/app/tasks/${id}`}
         />

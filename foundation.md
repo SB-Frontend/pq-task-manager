@@ -6,12 +6,27 @@ This document records the technical foundation of the Project Task Manager: the
 technology choices, storage strategy, authentication model, feature set, and
 project-level rules **as they are actually implemented and verified**.
 
-The application is a small, single-user personal work tracker for a frontend
-developer. It answers three questions:
+The application is a small work tracker for a frontend developer and the few
+people working alongside them. It answers three questions:
 
 - What am I working on?
 - What is pending?
 - What did I actually do, and when?
+
+> **Amended — the application is multi-account, not single-user.** It began as a
+> single-user tracker and the specification is written that way. It is now
+> deliberately multi-account: accounts are created by the instance owner from
+> Settings (§7, §14), tasks can be assigned to a named person (§10), and every
+> account has its own credentials and sessions.
+>
+> **Work is scoped by assignment (§24).** A member sees the tasks assigned to
+> them and the projects holding those tasks, and nothing else. The owner sees
+> everything and is the only person who creates projects and tasks or decides
+> who holds them. Adding an account is still a meaningful act, which is why
+> public registration is closed (§7) and account creation belongs to the owner.
+>
+> This is scoping, not tenancy: there is one instance, one owner, and one shared
+> database, and the owner can see everyone's work.
 
 The governing requirement document is `Project Task Manager.txt`, referred to
 throughout as **the specification**. Where this document and the specification
@@ -137,7 +152,7 @@ Supabase PostgreSQL
   which a Server Action cannot provide.
 - Business calculations live in the domain modules, not in components.
 
-**Verified:** 18 modules carry `server-only`; a scan of every `"use client"`
+**Verified:** 21 modules carry `server-only`; a scan of every `"use client"`
 file's imports finds no client component importing a server-only module. Zod and
 all validation schemas remain server-side.
 
@@ -148,9 +163,9 @@ app/            Routes and layouts (App Router)
 components/     UI components (ui, layout, auth, projects, tasks, work-logs,
                 dashboard, settings)
 lib/            Domain modules, storage layer, helpers
-lib/storage/    JSON storage layer (server-only)
+lib/storage/    Supabase data layer (server-only)
 types/          Shared TypeScript types
-scripts/        Maintenance scripts (backup)
+scripts/        Maintenance scripts (backup, Supabase migration)
 supabase/       schema.sql
 data/           Legacy JSON snapshot (git-ignored, no longer used at runtime)
 backups/        Local backups of the legacy snapshot (git-ignored)
@@ -251,9 +266,33 @@ the server**, using the **service-role key**. Row Level Security is enabled on
 every table with **no policies**, so the publishable key — which does reach
 browsers — can read and write nothing.
 
+RLS is declared in `supabase/schema.sql`, which ends with
+`alter table … enable row level security` for **all six** tables — `users`,
+`sessions`, `projects`, `tasks`, `work_logs`, `activities` — and defines no
+policy on any of them.
+
 **Verified with real data present:** the service-role client sees all rows; the
-public key returns **zero** rows on all six tables, and its `INSERT` is rejected
-with `42501` while `UPDATE` and `DELETE` affect no rows.
+publishable key returns **zero** rows on all six tables, and its `INSERT` is
+rejected with `42501` while `UPDATE` and `DELETE` affect no rows.
+
+> **Audit note — how to re-run that check.** The publishable/anon key is
+> deliberately **not** in `.env.local`, because the application never uses one.
+> The zero-rows test above therefore cannot be repeated from the repository
+> alone, and PostgREST does not expose `pg_catalog`, so RLS state cannot be read
+> back through the API either. What *was* re-confirmed during the pre-production
+> audit: the schema enables RLS on all six tables with no policies, and REST
+> requests to all six with **no key** and with an **invalid key** are rejected
+> `401`. To re-prove enforcement directly, run in the Supabase SQL Editor:
+>
+> ```sql
+> select relname, relrowsecurity
+>   from pg_class
+>  where relname in ('users','sessions','projects','tasks','work_logs','activities');
+> select tablename, policyname from pg_policies where schemaname = 'public';
+> ```
+>
+> Expected: `relrowsecurity = true` on all six rows, and the second query
+> returning nothing.
 
 ### The legacy JSON snapshot
 
@@ -364,15 +403,29 @@ no middleware is used — the check lives next to the data it protects.
 
 ### Verified behaviour
 
+**Users and sessions both live in Supabase.** Login reads the `users` row and
+inserts a `sessions` row; every request resolves the cookie against that table;
+logout deletes the row. Nothing about a signed-in user is held in process
+memory, which is precisely why the application survives on serverless (§6, §19).
+
 - Logged-out access to every protected route → `307 → /login`
 - Forged cookie → `307 → /login`
 - Expired session → rejected and swept from storage
-- Logout → session count decreases server-side; protected routes then refuse
-- Session survives reload
+- Logout → the session row is deleted from Supabase; protected routes then
+  refuse, and `/app` redirects to `/login`
+- Session survives reload — **and survives a full server restart**, because the
+  session is a database row, not process state. Confirmed twice during the
+  pre-production audit: the browser stayed signed in across restarts of
+  `next start`.
 - Fresh identifier issued per login (fixation prevented)
+- The session cookie is unreadable from JavaScript — `document.cookie` returns
+  empty while signed in, and returns only `theme=…` once a theme is chosen
 - Password hash never appears in any rendered HTML
-- Login errors are identical for unknown email and wrong password, so accounts
-  cannot be enumerated
+- Login errors are identical for unknown email and wrong password, so the
+  *response body* cannot be used to discover which emails are registered.
+  **Corrected:** the response *time* still differs — a miss returns before any
+  bcrypt work, a hit pays the full cost-12 compare. Enumeration by timing is
+  therefore possible. Recorded as a limitation, not fixed (§21).
 
 ### Deliberately excluded
 
@@ -390,10 +443,17 @@ any visitor read and edit everything. Public registration resolves in this order
 
 1. **`ALLOW_REGISTRATION=true`** → open. Deliberate, for development or an
    emergency where no owner account can sign in.
-2. **`ALLOW_REGISTRATION=false`** → closed, unconditionally. Recommended in
-   production; the bootstrap path below is **not** consulted.
+2. **`ALLOW_REGISTRATION=false`** → closed, unconditionally. **This is the
+   production configuration.** The bootstrap path below is **not** consulted.
 3. **Unset** → closed, unless no account exists yet, so a fresh deployment can
    be bootstrapped by its first user.
+
+**Production sets `ALLOW_REGISTRATION=false` explicitly, and `.env.example`
+ships that line.** Unset would also be closed in practice once an account
+exists, but only as a consequence of the data — the explicit setting states the
+intent and is not silently re-opened by an empty table. The emergency route is
+retained deliberately: `ALLOW_REGISTRATION=true` re-opens self-registration for
+development, or for recovery when no owner account can sign in.
 
 When closed, `/register` **redirects to `/login`** rather than rendering a form
 that cannot be used, and the login page shows no register link. Both are
@@ -404,12 +464,21 @@ The owner's Settings → Accounts flow is governed by `isOwner()` and is
 
 The check lives in `isRegistrationOpen()` and is enforced inside
 `registerUser()` — the single function that inserts a user — **before** the
-write, so a direct Server Action call cannot bypass it. The register page shows
-a closed state and the login page hides the register link.
+write, so a direct Server Action call cannot bypass it. The `/register`
+redirect and the hidden login link are presentation only.
 
-**Verified:** with one account present and no flag set, `/register` renders
-"Registration closed", the login page shows zero register links, and no account
-was created by an attempted submission.
+**Verified against a production build with `ALLOW_REGISTRATION=false`:**
+
+- `GET /register` → `307 → /login`.
+- The login page contains zero register links.
+- `registerAction` invoked **directly over HTTP**, bypassing the UI entirely —
+  correct `Next-Action` id, correct RSC argument encoding, valid `Origin`, and a
+  complete, schema-valid payload — returned
+  `{"message":"Registration is closed. Ask the owner of this instance for an
+  account."}`, issued no redirect, and wrote nothing. The guard, not the UI, is
+  what refuses.
+- With `ALLOW_REGISTRATION=true` the same form creates an account and signs the
+  new user in, so the emergency route remains available.
 
 ### Instance owner
 
@@ -427,9 +496,20 @@ who may reach it. Self-registration guards with `isRegistrationOpen()`, and the
 Settings path guards with `isOwner()` **before** any write. Accounts created by
 the owner are **not** signed in — the owner keeps their own session.
 
-**Verified:** a non-owner's Settings page contains no Accounts section and does
-not leak other accounts' emails; the owner sees the account list and can create
-an account; the new account has no session; and password mismatch is rejected.
+**Verified against a production build:**
+
+- A non-owner's Settings page contains no Accounts section, and the only email
+  in the response is their own — the other accounts do not leak.
+- The owner's Settings page lists every account, marks the owner, and creates an
+  account successfully.
+- The created account exists in Supabase with **zero** sessions: it is not
+  signed in, and the owner keeps their own session.
+- Password mismatch and duplicate email are both rejected.
+- **`createUserAction` invoked directly over HTTP by a non-owner** — valid
+  session, correct `Next-Action` id, correct argument encoding — returned
+  "Only the owner of this instance can add accounts." and wrote nothing. The
+  same call with no session redirected to `/login`. Hiding the section is
+  presentation; `isOwner()` is the boundary.
 
 ---
 
@@ -529,9 +609,18 @@ Implemented from specification §17, deliberately simple:
 
 A task may be assigned to another user via optional `assigneeId`.
 
-- Assignment is **collaboration metadata, not access control.** It records who
-  is working on something and grants no ownership, visibility, or permission of
-  any kind.
+- Assignment is **the access grant** (§24). It records who is working on
+  something *and* determines who can see it: a member sees a task only when it
+  is assigned to them, and the project only because it holds that task.
+
+  > **Amended.** This read "collaboration metadata, not access control … grants
+  > no ownership, visibility, or permission of any kind." That was true until
+  > per-user scoping was adopted (§24). The field did not change shape — no
+  > migration was needed — it changed meaning.
+
+- **Assigning is owner-only**, and so is moving a task between projects. A
+  member may edit a task assigned to them but may not hand it on, because
+  either act would move the work out of their own view.
 - Assignment is optional; unassigned tasks remain valid, and tasks created
   before the feature existed continue to work unchanged.
 - Assigning and unassigning are both supported.
@@ -765,11 +854,19 @@ sessions, or storage. Theme and account state cannot become entangled.
   new password must differ from the current one.
 - The current password is required **even though the caller is already
   authenticated**, so a borrowed session cannot silently take over the account.
-- On success the password hash is updated and **all other sessions are revoked
-  while the current session is retained.**
+- On success the new hash is written to the Supabase `users` row, and **all
+  other sessions for that user are deleted from the Supabase `sessions` table
+  while the current session is retained** (`deleteOtherSessions`). Both are
+  database writes; nothing is held in process memory.
 - The password hash is never exposed in any response.
 - No activity entry is recorded for a password change — the activity history is
   about work, not security events.
+
+**Verified against a production build:** with four sessions open for one
+account, changing the password rewrote the `password_hash` in Supabase (the old
+password no longer verifies, the new one does) and left exactly **one** session
+row — the one that made the change. The other three were gone from the
+database, not merely from a cookie.
 
 ### Accounts (owner only)
 
@@ -778,8 +875,10 @@ The owner sees an additional **Accounts** section listing every account with an
 password rules cannot diverge from self-registration, and the existing hashing
 helpers.
 
-The copy states plainly that anyone with an account can see and edit everything
-— adding a person is a meaningful act, not a limited invitation.
+The copy tells the owner what an account actually grants: the new person sees
+only the tasks assigned to them and the projects holding those tasks (§24), and
+cannot create or change projects. It is a limited invitation, and the copy says
+so rather than overstating it in either direction.
 
 ### Deliberately excluded
 
@@ -944,9 +1043,10 @@ gradient was introduced.
 
 **Retry behaviour.** The retry calls `router.refresh()` **and** `reset()` inside
 a transition. `reset()` alone re-renders the cached failure and the error simply
-reappears — this was found and fixed during hardening by corrupting a data file,
-observing the boundary, repairing the file, and confirming recovery without a
-page reload.
+reappears — this was found and fixed during hardening, when the store was still
+JSON, by corrupting a data file, observing the boundary, repairing the file, and
+confirming recovery without a page reload. The fix is storage-independent; the
+equivalent trigger now is the database being unreachable.
 
 **Invalid identifiers** render the correct "not found" UI. See §20.1 for the
 status-code consequence of the loading boundary.
@@ -989,10 +1089,48 @@ required any more.
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Public; safe in the browser |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Server only.** Bypasses RLS. Never `NEXT_PUBLIC_`, never committed |
-| `ALLOW_REGISTRATION` | Optional; `true` temporarily opens registration |
+| `ALLOW_REGISTRATION` | **Set to `false` in production.** `false` closes public registration unconditionally; `true` opens it deliberately (emergency/development); unset closes it unless no account exists. See §7 |
+
+All three are documented with empty values in **`.env.example`**, which is the
+only `.env*` file in git. `SUPABASE_SERVICE_ROLE_KEY` must never carry a
+`NEXT_PUBLIC_` prefix.
 
 **Verified:** the service-role key appears **zero** times across the 36 files of
-the built client bundle, and the string `SERVICE_ROLE` appears in none of them.
+the built client bundle, the string `SERVICE_ROLE` appears in none of them, and
+a byte-exact search for the key's own value across the **whole** of `.next` —
+server output included — returns no match.
+
+### Final deployment architecture
+
+**Decided.** This is the shape the application deploys in; nothing below is
+open.
+
+```text
+Browser
+   │  HTTPS. HTTP-only, SameSite=Lax, Secure session cookie (opaque id only)
+   ▼
+Next.js 16 App Router, Node.js 20.9+     ← stateless; any number of instances
+   │  requireUser() at the layout, every page, every action, the export route
+   ▼
+lib/storage/*  (server-only, service-role key)
+   ▼
+Supabase PostgreSQL                      ← the single source of truth
+```
+
+- **One process type.** No separate API tier, no worker, no scheduler, no
+  middleware, no websocket.
+- **No local state.** No writable disk, no session affinity, no persistent
+  volume. Instances are interchangeable, which is what makes serverless viable.
+- **One outbound dependency at runtime:** Supabase over HTTPS.
+- **Constraints that must hold in production:** HTTPS (the session cookie is
+  `Secure`); both Supabase variables set on the host; `ALLOW_REGISTRATION=false`;
+  and network-level restriction of who can reach the deployment, because there
+  is no per-user data scoping (§21).
+- **`data/*.json` has no runtime role.** It is a pre-migration snapshot, kept as
+  a fallback, git-ignored, and never read or written by the application.
+  Verified: no filesystem API and no reference to `data/` appears anywhere in
+  `lib/`, `app/` or `components/`, and the files' checksums and mtimes are
+  unchanged after a full production exercise of every feature.
 
 ### Previous limitation, now resolved
 
@@ -1003,10 +1141,11 @@ session immediately vanished. It is what prompted the migration.
 
 ### Remaining deployment caution
 
-The application still has **no per-user data scoping** (§21). Registration is
-closed by default, which removes the main exposure, but anyone who obtains an
-account sees all data. For a public URL, also restrict who can reach the
-deployment — for example Vercel Deployment Protection.
+Work is scoped by assignment (§24), so an account no longer implies sight of
+everything — but **the owner account still does**, and scoping is enforced in
+the application rather than at the database. Registration is closed by default,
+which removes the anonymous path. For a public URL, also restrict who can reach
+the deployment — for example Vercel Deployment Protection.
 
 ### Backup and restore
 
@@ -1024,11 +1163,24 @@ Scheduling database backups is a deployment responsibility (§20).
 
 **Implemented · Verified**
 
-- `.env.local` **removed** — it held stale MongoDB credentials from an abandoned
-  investigation. No `.env` file remains and none is needed.
-- Git-ignored: `data/*.json`, `backups/`, `.claude/`, `node_modules`, `.next`,
-  `.env*`.
-- Verified that no secret or personal data would be committed.
+> **Amended.** This section previously read "`.env.local` **removed** … No
+> `.env` file remains and none is needed." That was true only before the
+> Supabase migration, when the application required no configuration at all. A
+> local `.env.local` is now **required** — `getSupabase()` throws without
+> `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (§19). The earlier
+> statement contradicted the environment-variable table in this same section and
+> has been corrected.
+
+- **`.env.local` is required and git-ignored.** It holds the Supabase URL, the
+  service-role key, and `ALLOW_REGISTRATION=false`.
+- **`.env.example` is committed** and documents all three variables with no
+  values. It is the only `.env*` file in git.
+- Git-ignored: `.env*` (except `.env.example`), `data/*.json`, `backups/`,
+  `.claude/`, `node_modules`, `.next`, `*.tsbuildinfo`.
+- **Verified:** `git log --all --name-only` shows no `.env` file and no
+  `data/` file has **ever** been committed, in any commit; `git check-ignore`
+  confirms `.env.local` is ignored; and the service-role key appears zero times
+  anywhere in `.next` (§19).
 
 ---
 
@@ -1040,8 +1192,13 @@ These are **open**. They are not gaps in the implementation.
 
 - **Outcome:** `app/app/loading.tsx` was **removed**, because after the Supabase
   migration it left every `/app` route stuck on the loading fallback in the
-  browser (§18). Removing it also restored true **404** responses for
-  `notFound()`, so both costs disappeared together.
+  browser — the page never rendered (§18). Removing it also restored true
+  **404** responses for `notFound()`, so both costs disappeared together.
+- **Re-verified in the production build during the pre-production audit:** no
+  `loading.tsx` exists anywhere under `app/`; every route renders its real
+  content in the browser with no stuck fallback; and unknown URLs return a true
+  `404`. The removal is settled and is not to be reversed without re-testing
+  browser rendering against Supabase.
 - Historical detail follows.
 
 - **Former choice:** keep `app/app/loading.tsx`.
@@ -1067,12 +1224,19 @@ These are **open**. They are not gaps in the implementation.
   per-user data scoping (§21). Registration is closed by default (§7); Vercel
   Deployment Protection is the recommended additional guard.
 
-### 20.3 First Git commit
+### 20.3 Git history — **RESOLVED**
 
-- The repository is **prepared** — `.gitignore` verified, no secrets would be
-  committed.
-- **The first commit has not been made.** The project currently exists only as
-  working-directory files, with no history and no rollback.
+> **Amended.** This section previously read "The first commit has not been made
+> … no history and no rollback." That is no longer true and has been corrected.
+
+- The repository is under version control with a remote at
+  `SB-Frontend/pq-task-manager`, and history begins at `de3af36 Initial commit`.
+- Subsequent commits: `cbb18a0` (Supabase migration), `c29992a` (owner-managed
+  accounts and registration lockdown, merged as `8cd3d4f`), `cb369b2`
+  (foundation corrections).
+- Current working branch: `feat/owner-accounts-and-registration-lockdown`.
+- `.gitignore` verified; no secret or personal data has been committed at any
+  point in the history (§19).
 
 ### 20.4 Backup operations
 
@@ -1081,12 +1245,21 @@ These are **open**. They are not gaps in the implementation.
 - `npm run backup` now covers only the legacy JSON snapshot.
 - **Still open:** no database backup schedule is configured.
 
-### 20.5 Per-user data scoping
+### 20.5 Per-user data scoping — **RESOLVED**
 
-- Every signed-in user sees all data. Registration is closed by default, so the
-  exposure is limited to accounts you create.
-- **Open:** whether to add ownership/visibility scoping. It is a substantial
-  change and outside the current specification.
+> **Amended.** This was previously open: "Every signed-in user sees all data …
+> **Open:** whether to add ownership/visibility scoping." The decision has now
+> been taken and implemented. See §24.
+
+- **Outcome: assignment-based scoping.** A member sees a task only when it is
+  assigned to them, and a project only when it holds such a task. The owner is
+  unscoped.
+- The deciding reason was practical rather than theoretical: with several
+  accounts in use, every member could edit every project and every task, which
+  is not what an assignment is meant to mean.
+- Deliberately **not** adopted: a role or permission system, per-record
+  ownership columns, or Supabase Auth / RLS policies for user data. The rule is
+  derived from `tasks.assignee_id`, which already existed.
 
 ---
 
@@ -1108,10 +1281,17 @@ what remains is architectural.
 
 ### Still true
 
-1. **No per-user data scoping.** Every signed-in user sees every project, task
-   and work log. Task assignment records who is working on something; it is not
-   access control. Registration is closed by default (§7), which removes the
-   main exposure, but anyone holding an account sees everything.
+1. **Scoping is assignment-based, not ownership-based.** A member sees exactly
+   the tasks assigned to them and the projects holding them (§24). What this
+   does **not** give you: a member cannot be granted sight of a project without
+   being given work in it, there is no "team" or "read-only observer", and
+   unassigned work is owner-only. Those would need a real permission model,
+   which remains deliberately out of scope.
+
+   > **Superseded.** This entry previously read "No per-user data scoping.
+   > Every signed-in user sees every project, task and work log … anyone
+   > holding an account sees everything." That is no longer true; see §24.
+
 2. **No rate limiting on login.** bcrypt at cost 12 makes guessing slow but not
    impossible. Best handled at a reverse proxy.
 3. **Multi-statement sequences are not transactional.** Related writes are
@@ -1120,10 +1300,22 @@ what remains is architectural.
 4. **Spreadsheet formula injection is not guarded.** User-supplied text is
    written verbatim into Excel cells; a value beginning `=`, `+`, `-` or `@`
    is interpreted as a formula by Excel.
+5. **Login is enumerable by timing.** The error message is identical for an
+   unknown email and a wrong password, but an unknown email returns before any
+   bcrypt work while a known one pays the full cost-12 compare. The usual remedy
+   is to verify against a fixed dummy hash on the miss path. **Recorded during
+   the pre-production audit; deliberately not fixed in this pass**, because it
+   changes the login path and the deployment is access-restricted (§19).
+6. **No HTTP security headers.** `next.config.ts` sets no `headers()`, so there
+   is no Content-Security-Policy, `X-Frame-Options`/`frame-ancestors`,
+   `Referrer-Policy` or HSTS, and `X-Powered-By: Next.js` is served. Nothing in
+   the application depends on their absence; adding them is a configuration
+   change, deferred to the deployment decision (§19).
 
-**Assessment:** the storage architecture is now suitable for real deployment,
+**Assessment:** the storage architecture is suitable for real deployment,
 including serverless. The remaining items are product and hardening decisions,
-not storage constraints.
+not storage constraints. Items 5 and 6 were found during the final
+pre-production audit and are **accepted and deferred**, not overlooked.
 
 ---
 
@@ -1131,22 +1323,49 @@ not storage constraints.
 
 **Established · Applied throughout**
 
-Every feature was verified against a running application. The protocol for any
-change touching data:
+Every feature is verified against a running application.
 
-1. **Back up** the real data files and record SHA-256 checksums.
+> **Amended.** This protocol was written for the JSON store and told the reader
+> to back up and restore `data/*.json`. **Those files are no longer the source of
+> truth and copying them proves nothing** — the live data is in Supabase. The
+> steps below operate on the database instead. The shape of the protocol is
+> unchanged: snapshot, seed, exercise, remove, prove the real data is untouched.
+
+The protocol for any change touching data:
+
+1. **Snapshot the six Supabase tables.** For each table record the row count,
+   the sorted list of ids, and a SHA-256 digest over the rows canonicalised
+   (rows sorted by id, keys sorted). This is the baseline; it never leaves the
+   machine and no credential is printed.
 2. **Seed temporary QA records** — projects, tasks in every status and priority,
-   varied due dates, tags, work logs, and additional user accounts as needed.
-3. **Test end-to-end**: CRUD, search, filtering, sorting, assignment, export,
-   authentication and session behaviour, accessibility, and responsive layout at
+   varied due dates, tags, work logs, and additional accounts as needed. Seed by
+   insertion only; **never modify an existing row**, so the real data cannot be
+   damaged by the test itself. Ownership can be exercised without touching the
+   real owner by inserting a QA account whose `created_at` predates it, since
+   ownership is derived from the oldest `created_at` (§7).
+3. **Test end-to-end** against a **production build** (`npm run build` +
+   `npm run start`), not the dev server: CRUD, search, filtering, sorting,
+   assignment, export, authentication and session behaviour, ownership and
+   registration gating, accessibility, and responsive layout at
    1280 / 768 / 375 / 320.
-4. **Remove all QA records**, including QA user accounts and sessions.
-5. **Restore the real data** and verify every file is **byte-identical** by
-   SHA-256.
-6. **Confirm no QA residue** remains by scanning the data files.
+4. **Remove every row that is not in the baseline**, in foreign-key-safe order
+   (`work_logs`, `activities`, `tasks`, `sessions`, `projects`, `users`).
+   Remember that ordinary use writes `activities` rows as a side effect — they
+   are QA residue too.
+5. **Re-read all six tables and compare digests to the baseline.** Every table
+   must come back **identical**, with no extra and no missing ids. A differing
+   digest means residue or damage, and is a failure.
+6. **Confirm the legacy snapshot was not touched** — `data/*.json` checksums and
+   mtimes must be unchanged, which is also evidence the application never reads
+   or writes them.
 
-This protocol was followed for every section and every restoration verified
-byte-for-byte.
+Authorisation must be tested **below the UI**. Hiding a control proves nothing:
+invoke the Server Action directly over HTTP with the correct `Next-Action` id
+and argument encoding, once with no session, once as a non-owner, and confirm
+the server refuses and writes nothing.
+
+This protocol was followed for the final pre-production audit and the
+restoration verified digest-for-digest across all six tables.
 
 ### Standing checks
 
@@ -1166,17 +1385,167 @@ states, backup, and deployment documentation.
 **Deferred, deliberately:**
 
 
-- Ownership, visibility scoping, roles, and permissions (§10)
+- Per-user data scoping, visibility rules, roles, and permissions (§10, §21).
+  Instance ownership (§7) is the one exception and is not a role system.
 - Email verification, password reset, OAuth, 2FA (§7)
 - Default task priority and status preferences (§14)
 - Pagination (§12)
 - Assignee on the dashboard (§10)
 - An automated test framework (§22)
+- Login rate limiting and constant-time login (§21)
+- HTTP security headers (§21)
 
 **Not to be changed without a new decision:** the Supabase storage architecture
-and its service-role/RLS access model, the authentication and session model,
-ExcelJS and its accepted advisory, the 1024px task-table breakpoint, and the
-single-implementation rule for task filtering.
+and its service-role/RLS access model, the custom authentication and
+server-side session model, the closed-by-default registration gate and its
+`ALLOW_REGISTRATION` escape hatch, owner-derived-from-oldest-account, the
+absence of `loading.tsx` under `/app`, ExcelJS and its accepted advisory, the
+1024px task-table breakpoint, and the single-implementation rule for task
+filtering.
+
+**Explicitly not adopted:** Supabase Auth, JWT authentication, authentication
+middleware, a browser-side Supabase client, and any second persistence layer.
+The application keeps its own authentication and reaches Postgres only from the
+server (§6, §7).
 
 **Completed since the original foundation:** the migration from local JSON files
-to Supabase PostgreSQL (§6), and closing open registration (§7).
+to Supabase PostgreSQL (§6), owner-managed account creation (§7, §14), closing
+public registration and making `ALLOW_REGISTRATION=false` the explicit
+production configuration (§7), removal of `loading.tsx` (§20.1), and the final
+pre-production audit that corrected the stale sections of this document
+(§1, §7, §19, §20.3, §22).
+
+---
+
+## 24. Per-User Scoping
+
+**Decided · Implemented · Verified**
+
+> **Amended.** §21 previously recorded "No per-user data scoping" as a standing
+> limitation and §20.5 left the decision open. Both are now superseded by this
+> section.
+
+### The rule
+
+Visibility follows **assignment**. There is still no role column and no
+permission table; the two states are derived from facts that already existed.
+
+| | Owner | Member |
+|---|---|---|
+| Tasks visible | all | those with `assigneeId` = them |
+| Projects visible | all | those holding at least one visible task |
+| Work logs visible | all | those on a visible task |
+| Activity visible | all | entries naming a visible task |
+| Edit a visible task | yes | yes |
+| Set a task's assignee or project | yes | **no** |
+| Create a task | yes | **no** |
+| Delete a task | yes | **no** |
+| Create, edit or archive a project | yes | **no** |
+| Log work on a visible task | yes | yes |
+
+Three consequences, all deliberate:
+
+- **Unassigned tasks are owner-only.** Assignment is the grant; without one
+  there is nothing to see.
+- **A member's project list is a by-product of their assignments.** A project
+  appears when they are given work in it and disappears when that work is
+  reassigned away. Nothing else adds or removes a project from their view.
+- **A member's project figures describe their own work.** "1 of 2 complete"
+  counts their tasks, not the project's. Counting tasks they cannot open would
+  disclose how much hidden work exists.
+
+### Why assignment rather than ownership
+
+The alternative was a `created_by` column on projects and tasks, with
+visibility following creation. It was rejected: it needs a schema migration and
+a backfill, it invents a second notion of "whose" alongside the assignee that
+already existed, and it answers a question nobody asked — the requirement was
+"the person I assigned it to should see it", not "the person who typed it in
+should keep it".
+
+The assignee was already there, already meant exactly this, and needed **no
+schema change**. `tasks.assignee_id` changed meaning rather than shape: it was
+collaboration metadata (§10), and it is now the access grant. §10 is amended
+accordingly.
+
+### Where the rule lives
+
+**`lib/auth/scope.ts` is the single implementation**, in the same way
+`lib/tasks/filters.ts` is the single implementation of filtering. Every query
+module and every mutating action derives its answer from it, so the list, the
+detail page, the dashboard and the Excel export cannot disagree about what a
+person may see. `requireViewer()` replaces `requireUser()` wherever a scoping
+decision follows.
+
+### Missing, not forbidden
+
+A record the viewer may not see is reported as **absent**. Queries return
+`null`, the route calls `notFound()`, and the response is a true 404 — the same
+answer an id that was never real would get. A "forbidden" response would confirm
+the id exists. Owner-only routes (`/app/projects/new`, `/app/tasks/new`,
+`/app/projects/[id]/edit`) answer 404 for a member for the same reason.
+
+The one deliberate exception is `updateTaskAction`, which answers "You can only
+edit tasks that are assigned to you." The caller already holds the id, task ids
+are not enumerable, and a task reassigned away mid-edit deserves a real reason
+rather than a lie.
+
+### The form is not the boundary
+
+`updateTaskAction` **pins `projectId` and `assigneeId` to their stored values**
+for anyone who may not set them, rather than trusting the submission. Hiding the
+two selects (`lockPlacement` on `TaskForm`) keeps the form honest; the pinning is
+what makes it true. A forged or stale post cannot move a task between projects
+or hand it to someone else.
+
+### Cost
+
+Scoping adds no storage read. A member's tasks are narrowed by the database in
+the query that already fetched them (`tasks.findWhere({ assigneeId })`), and
+their project list is derived from the tasks already in hand. The task list is
+still exactly three reads. Ownership resolution moved to a one-row query
+(`getOldestUserId()`) because it is now consulted on nearly every request.
+
+A member's reads also load fewer rows than an owner's, and `listAssignableUsers`
+returns only the member themselves — a member never learns who else holds an
+account.
+
+### Verified against a production build
+
+Exercised with a seeded member account holding one task, alongside the real
+data, following the §22 protocol. Inserts only; no existing row was modified,
+and all six tables were digest-identical to the baseline afterwards.
+
+- **Member's view:** their project and task only — zero real project names and
+  zero real task titles rendered anywhere, including the dashboard.
+- **Direct URL access** to a project, task, task-edit, project-edit, work-log
+  edit, `/app/projects/new` and `/app/tasks/new` → **404** for the member,
+  **200** for the owner.
+- **Server Actions invoked directly over HTTP**, bypassing the UI, with correct
+  `Next-Action` ids and argument encoding:
+  - member re-pointing `updateTaskAction` at a task that is not theirs →
+    refused, nothing written;
+  - member calling `createProjectAction` → refused;
+  - member calling `createTaskAction` → refused;
+  - member logging work on a task that is not theirs → refused;
+  - member calling `deleteTaskAction` and `archiveProjectAction` → no-ops, the
+    task still present and the project still active.
+- **Pinning:** a member editing their **own** task while submitting a foreign
+  `projectId` and `assigneeId` succeeded for title, status, priority and notes,
+  and left `project_id` and `assignee_id` **unchanged**.
+- **The intended story:** the owner assigned the member a task in a real
+  project; that project then appeared in the member's list, showing **1** task
+  to the member and **13** to the owner on the same page.
+- **Export:** the member's workbook contained exactly their 2 tasks; the
+  owner's contained all 27. An export can never hold a row its requester could
+  not see on screen.
+- **Owner's experience is unchanged** throughout.
+
+### Still open
+
+Scoping governs the application. It is **not** enforced at the database: the
+server still reaches Postgres with the service-role key, so a defect in a query
+module is not caught by a second layer. That remains acceptable for the same
+reason as §6 — `lib/storage/` is `server-only` and every request passes through
+`requireViewer()` — but it is the obvious next hardening step if the instance
+ever carries data that must not mix.

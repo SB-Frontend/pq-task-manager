@@ -8,7 +8,7 @@ import PageHeader from "@/components/ui/PageHeader";
 import PriorityBadge from "@/components/ui/PriorityBadge";
 import StatusBadge from "@/components/ui/StatusBadge";
 import WorkLogList from "@/components/work-logs/WorkLogList";
-import { requireUser } from "@/lib/auth/auth";
+import { canDeleteTasks, requireViewer } from "@/lib/auth/scope";
 import { formatDate, formatDuration } from "@/lib/format";
 import { getTask } from "@/lib/tasks/queries";
 import { listWorkLogsForTask, totalMinutes } from "@/lib/work-logs/queries";
@@ -27,9 +27,10 @@ export default async function TaskDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireUser();
+  const viewer = await requireViewer();
 
-  // Covers both a malformed id and a task that does not exist.
+  // Covers a malformed id, a task that does not exist, and a task assigned to
+  // somebody else — all three are simply "not found".
   const task = await getTask((await params).id);
   if (!task) notFound();
 
@@ -55,7 +56,9 @@ export default async function TaskDetailPage({
             <ButtonLink href={`/app/tasks/${task.id}/edit`} variant="secondary">
               Edit
             </ButtonLink>
-            <DeleteTaskButton taskId={task.id} taskTitle={task.title} />
+            {canDeleteTasks(viewer) && (
+              <DeleteTaskButton taskId={task.id} taskTitle={task.title} />
+            )}
           </>
         }
       />

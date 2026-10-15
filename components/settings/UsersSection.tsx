@@ -5,8 +5,9 @@ import type { PublicUser } from "@/types";
 /**
  * Owner-only view of the accounts on this instance.
  *
- * Everyone who has an account can see all data, so adding one is a meaningful
- * act - the copy says so plainly rather than implying it grants limited access.
+ * An account sees only the work assigned to it (lib/auth/scope.ts), so the copy
+ * states what it actually grants rather than overstating it in either
+ * direction.
  */
 export default function UsersSection({
   users,
@@ -46,8 +47,9 @@ export default function UsersSection({
         <div>
           <h3 className="text-sm font-medium">Add an account</h3>
           <p className="mt-1 text-sm text-muted">
-            Anyone with an account can see and edit every project, task and work
-            log. Tasks can then be assigned to them.
+            A new account sees only the tasks you assign to it, and the projects
+            those tasks belong to. It cannot create or change projects, create
+            or delete tasks, or reassign its own work.
           </p>
         </div>
 

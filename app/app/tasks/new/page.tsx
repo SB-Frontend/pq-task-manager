@@ -1,8 +1,10 @@
+import { notFound } from "next/navigation";
+
 import TaskForm from "@/components/tasks/TaskForm";
 import ButtonLink from "@/components/ui/ButtonLink";
 import EmptyState from "@/components/ui/EmptyState";
 import PageHeader from "@/components/ui/PageHeader";
-import { requireUser } from "@/lib/auth/auth";
+import { canCreateTasks, requireViewer } from "@/lib/auth/scope";
 import { createTaskAction } from "@/lib/tasks/actions";
 import { listSelectableProjects } from "@/lib/tasks/queries";
 import { listAssignableUsers } from "@/lib/users/queries";
@@ -14,7 +16,10 @@ export default async function NewTaskPage({
 }: {
   searchParams: Promise<{ projectId?: string }>;
 }) {
-  await requireUser();
+  const viewer = await requireViewer();
+  // Owner-only. Reported as missing rather than forbidden, like every other
+  // route a viewer has no claim to.
+  if (!canCreateTasks(viewer)) notFound();
 
   const [{ projectId }, projects, assignees] = await Promise.all([
     searchParams,
