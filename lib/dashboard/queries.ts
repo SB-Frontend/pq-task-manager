@@ -1,9 +1,14 @@
 import "server-only";
 
-import { requireUser } from "@/lib/auth/auth";
+import {
+  readVisibleTasks,
+  requireViewer,
+  scopeActivities,
+  scopeProjects,
+  scopeWorkLogs,
+} from "@/lib/auth/scope";
 import { activities } from "@/lib/storage/activities";
 import { projects } from "@/lib/storage/projects";
-import { tasks } from "@/lib/storage/tasks";
 import { workLogs } from "@/lib/storage/work-logs";
 import type {
   Activity,
@@ -100,45 +105,55 @@ function totalMinutes(logs: WorkLog[]): number {
  *
  * Each collection is read exactly once and the relationships are resolved in
  * memory, so adding a project never adds another storage read.
+ *
+ * **Every figure is scoped to the viewer.** For the owner that is the whole
+ * instance and nothing has changed. For a member every count, total and list
+ * describes only their own tasks and the projects holding them — a member's
+ * dashboard answers "what am I working on?", never "how much work exists?".
  */
 export async function getDashboardData(): Promise<DashboardData> {
-  await requireUser();
+  const viewer = await requireViewer();
 
-  const [allProjects, allTasks, allLogs, allActivities] = await Promise.all([
+  const [allProjects, visibleTasks, allLogs, allActivities] = await Promise.all([
     projects.list(),
-    tasks.list(),
+    readVisibleTasks(viewer),
     workLogs.list(),
     activities.list(),
   ]);
 
+  const visibleProjects = scopeProjects(viewer, allProjects, visibleTasks);
+  const visibleLogs = scopeWorkLogs(viewer, allLogs, visibleTasks);
+
   // One grouping pass instead of scanning every task per project.
   const tasksByProject = new Map<string, Task[]>();
-  for (const task of allTasks) {
+  for (const task of visibleTasks) {
     const group = tasksByProject.get(task.projectId);
     if (group) group.push(task);
     else tasksByProject.set(task.projectId, [task]);
   }
 
-  const projectNames = new Map(allProjects.map((project) => [project.id, project.name]));
-  const taskCounts = countTasks(allTasks);
+  const projectNames = new Map(
+    visibleProjects.map((project) => [project.id, project.name]),
+  );
+  const taskCounts = countTasks(visibleTasks);
 
   return {
-    projectCounts: countProjects(allProjects),
+    projectCounts: countProjects(visibleProjects),
     taskCounts,
-    loggedMinutes: totalMinutes(allLogs),
-    workLogCount: allLogs.length,
+    loggedMinutes: totalMinutes(visibleLogs),
+    workLogCount: visibleLogs.length,
     overallProgress:
       taskCounts.total === 0
         ? 0
         : Math.round((taskCounts.completed / taskCounts.total) * 100),
 
-    activeProjects: allProjects
+    activeProjects: visibleProjects
       .filter((project) => project.status === "active")
       .sort(byNewestUpdate)
       .slice(0, RECENT_PROJECTS)
       .map((project) => summariseProject(project, tasksByProject)),
 
-    recentTasks: allTasks
+    recentTasks: visibleTasks
       .slice()
       .sort(byNewestUpdate)
       .slice(0, RECENT_TASKS)
@@ -151,11 +166,11 @@ export async function getDashboardData(): Promise<DashboardData> {
         dueDate: task.dueDate,
       })),
 
-    recentActivity: allActivities
+    recentActivity: scopeActivities(viewer, allActivities, visibleTasks)
       .slice()
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, RECENT_ACTIVITIES),
 
-    isEmpty: allProjects.length === 0 && allTasks.length === 0,
+    isEmpty: visibleProjects.length === 0 && visibleTasks.length === 0,
   };
 }

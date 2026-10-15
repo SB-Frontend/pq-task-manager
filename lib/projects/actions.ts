@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { recordActivity } from "@/lib/activity";
-import { requireUser } from "@/lib/auth/auth";
+import { canManageProjects, NOT_ALLOWED, requireViewer } from "@/lib/auth/scope";
 import { projectSchema } from "@/lib/projects/schemas";
 import { projects } from "@/lib/storage/projects";
 
@@ -34,11 +34,20 @@ function readProjectForm(formData: FormData) {
   };
 }
 
+/**
+ * Projects are owner-only in every direction: created, edited and archived by
+ * the owner alone. Members receive projects implicitly, by being given work in
+ * them, and never shape the project itself.
+ *
+ * Checked here on the server, before any write, so hiding the buttons in the
+ * UI is presentation rather than the boundary.
+ */
 export async function createProjectAction(
   _prevState: ProjectFormState,
   formData: FormData,
 ): Promise<ProjectFormState> {
-  await requireUser();
+  const viewer = await requireViewer();
+  if (!canManageProjects(viewer)) return { message: NOT_ALLOWED.project };
 
   const parsed = projectSchema.safeParse(readProjectForm(formData));
 
@@ -69,7 +78,8 @@ export async function updateProjectAction(
   _prevState: ProjectFormState,
   formData: FormData,
 ): Promise<ProjectFormState> {
-  await requireUser();
+  const viewer = await requireViewer();
+  if (!canManageProjects(viewer)) return { message: NOT_ALLOWED.project };
 
   const parsed = projectSchema.safeParse(readProjectForm(formData));
 
@@ -104,7 +114,9 @@ export async function updateProjectAction(
  * task and work log attached to it stay in storage untouched.
  */
 export async function archiveProjectAction(id: string): Promise<void> {
-  await requireUser();
+  const viewer = await requireViewer();
+  // This action returns void, so it refuses by doing nothing and not redirecting.
+  if (!canManageProjects(viewer)) return;
 
   const project = await projects.find(id);
   if (!project) return;

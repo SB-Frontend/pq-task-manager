@@ -9,7 +9,7 @@ import ErrorState from "@/components/ui/ErrorState";
 /**
  * Catches unhandled errors inside the application area.
  *
- * The most likely cause here is the JSON store being unreadable.
+ * The most likely cause here is the database being unreachable.
  *
  * Retrying needs both halves: router.refresh() asks the server for a fresh
  * render, and reset() clears the boundary. reset() on its own re-renders the

@@ -1,12 +1,16 @@
+import { notFound } from "next/navigation";
+
 import ProjectForm from "@/components/projects/ProjectForm";
 import PageHeader from "@/components/ui/PageHeader";
-import { requireUser } from "@/lib/auth/auth";
+import { canManageProjects, requireViewer } from "@/lib/auth/scope";
 import { createProjectAction } from "@/lib/projects/actions";
 
 export const metadata = { title: "New project" };
 
 export default async function NewProjectPage() {
-  await requireUser();
+  const viewer = await requireViewer();
+  // Owner-only, reported as missing rather than forbidden.
+  if (!canManageProjects(viewer)) notFound();
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">

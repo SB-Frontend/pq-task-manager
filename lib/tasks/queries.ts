@@ -1,6 +1,13 @@
 import "server-only";
 
-import { requireUser } from "@/lib/auth/auth";
+import {
+  canSeeTask,
+  ownTasksFilter,
+  readVisibleTasks,
+  requireViewer,
+  scopeProjects,
+  type Viewer,
+} from "@/lib/auth/scope";
 import {
   applyTaskQuery,
   EMPTY_TASK_QUERY,
@@ -22,11 +29,11 @@ export interface TaskWithProject extends Task {
 function attachRelations(
   task: Task,
   allProjects: Project[],
-  allUsers: User[],
+  knownUsers: Pick<User, "id" | "name">[],
 ): TaskWithProject {
   const project = allProjects.find((candidate) => candidate.id === task.projectId);
   const assignee = task.assigneeId
-    ? allUsers.find((candidate) => candidate.id === task.assigneeId)
+    ? knownUsers.find((candidate) => candidate.id === task.assigneeId)
     : undefined;
 
   return {
@@ -38,39 +45,55 @@ function attachRelations(
   };
 }
 
+/**
+ * The names needed to label assignees.
+ *
+ * An owner may be looking at anyone's task, so they need every name. A member
+ * only ever sees their own tasks, so their own name is the only one required —
+ * and reading nothing further means no other account's name is even loaded.
+ */
+async function namesFor(viewer: Viewer): Promise<Pick<User, "id" | "name">[]> {
+  return viewer.isOwner ? users.list() : [{ id: viewer.id, name: viewer.name }];
+}
+
 export interface TaskListResult {
   /** Tasks after the query has been applied. */
   tasks: TaskWithProject[];
-  /** How many tasks exist in total, so "none yet" and "none match" can differ. */
+  /** How many tasks the viewer has in total, so "none yet" and "none match" can differ. */
   totalCount: number;
   /** Projects for the filter dropdown, from the same read. */
   projectOptions: { id: string; name: string }[];
 }
 
 /**
- * The global task list, filtered and sorted by `query`.
+ * The task list, scoped to the viewer, then filtered and sorted by `query`.
  *
- * Exactly two storage reads regardless of how many filters are active: tasks
- * and projects are each read once, joined in memory, then filtered in one pass.
+ * Still exactly three storage reads regardless of how many filters are active.
+ * Scoping does not add a read: a member's tasks are narrowed by the database in
+ * the same query that fetches them, and the project list is derived from the
+ * tasks already in hand.
  */
 export async function listTasks(
   query: TaskQuery = EMPTY_TASK_QUERY,
 ): Promise<TaskListResult> {
-  await requireUser();
+  const viewer = await requireViewer();
 
-  const [allTasks, allProjects, allUsers] = await Promise.all([
-    tasks.list(),
+  const [visible, allProjects, knownUsers] = await Promise.all([
+    readVisibleTasks(viewer),
     projects.list(),
-    users.list(),
+    namesFor(viewer),
   ]);
-  const withProject = allTasks.map((task) =>
-    attachRelations(task, allProjects, allUsers),
+
+  const withProject = visible.map((task) =>
+    attachRelations(task, allProjects, knownUsers),
   );
 
   return {
     tasks: applyTaskQuery(withProject, query),
-    totalCount: allTasks.length,
-    projectOptions: allProjects
+    totalCount: visible.length,
+    // Only projects the viewer can reach, so the filter cannot name a project
+    // they have no work in.
+    projectOptions: scopeProjects(viewer, allProjects, visible)
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((project) => ({ id: project.id, name: project.name })),
@@ -80,44 +103,65 @@ export async function listTasks(
 /**
  * Tasks belonging to one project. Reuses the same filter/sort implementation as
  * the global list, so the two can never drift apart.
+ *
+ * A member sees only their own tasks here, which is why a project's progress is
+ * derived from this same scoped set (see lib/projects/queries.ts): the counts a
+ * member is shown describe the work they can actually see.
  */
 export async function listTasksForProject(
   projectId: string,
   query: TaskQuery = EMPTY_TASK_QUERY,
 ): Promise<{ tasks: Task[]; totalCount: number }> {
-  await requireUser();
+  const viewer = await requireViewer();
 
-  const own = await tasks.findWhere({ projectId });
+  const own = await tasks.findWhere({ projectId, ...ownTasksFilter(viewer) });
 
   return { tasks: applyTaskQuery(own, query), totalCount: own.length };
 }
 
-/** One task with its project, or null when the id matches nothing. */
+/**
+ * One task with its project, or null when the id matches nothing **or the
+ * viewer may not see it**. The route turns null into its ordinary not-found
+ * page, so an id the viewer has no claim to is indistinguishable from an id
+ * that was never real.
+ */
 export async function getTask(id: string): Promise<TaskWithProject | null> {
-  await requireUser();
+  const viewer = await requireViewer();
 
   const task = await tasks.find(id);
-  if (!task) return null;
+  if (!task || !canSeeTask(viewer, task)) return null;
 
-  const [allProjects, allUsers] = await Promise.all([projects.list(), users.list()]);
-  return attachRelations(task, allProjects, allUsers);
+  const [allProjects, knownUsers] = await Promise.all([
+    projects.list(),
+    namesFor(viewer),
+  ]);
+  return attachRelations(task, allProjects, knownUsers);
 }
 
 /**
- * Projects offered in the task form. Archived projects are hidden, except the
- * one a task already belongs to, so editing such a task cannot silently move it.
+ * Projects offered in the task form.
+ *
+ * For the owner: every project, with archived ones hidden except the one the
+ * task already belongs to, so editing such a task cannot silently move it.
+ *
+ * For a member: only the task's current project, because a member may not move
+ * a task between projects. The form renders it as a fixed value, and
+ * `updateTaskAction` ignores any project a member submits regardless.
  */
 export async function listSelectableProjects(
   currentProjectId?: string,
 ): Promise<Pick<Project, "id" | "name" | "status">[]> {
-  await requireUser();
+  const viewer = await requireViewer();
 
   const all = await projects.list();
 
-  return all
-    .filter(
-      (project) => project.status !== "archived" || project.id === currentProjectId,
-    )
+  const selectable = viewer.isOwner
+    ? all.filter(
+        (project) => project.status !== "archived" || project.id === currentProjectId,
+      )
+    : all.filter((project) => project.id === currentProjectId);
+
+  return selectable
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((project) => ({ id: project.id, name: project.name, status: project.status }));
 }
@@ -132,25 +176,24 @@ export interface TaskExportData {
 }
 
 /**
- * The data behind an export, using the same query the page used.
- *
- * Three storage reads regardless of how many tasks match, and the work logs
- * are grouped in one pass rather than fetched per task.
+ * The data behind an export, using the same query **and the same scope** the
+ * page used. An export can therefore never contain a row its requester could
+ * not already see on screen.
  */
 export async function listTasksForExport(
   query: TaskQuery = EMPTY_TASK_QUERY,
 ): Promise<TaskExportData> {
-  await requireUser();
+  const viewer = await requireViewer();
 
-  const [allTasks, allProjects, allLogs, allUsers] = await Promise.all([
-    tasks.list(),
+  const [visible, allProjects, allLogs, knownUsers] = await Promise.all([
+    readVisibleTasks(viewer),
     projects.list(),
     workLogs.list(),
-    users.list(),
+    namesFor(viewer),
   ]);
 
   const filtered = applyTaskQuery(
-    allTasks.map((task) => attachRelations(task, allProjects, allUsers)),
+    visible.map((task) => attachRelations(task, allProjects, knownUsers)),
     query,
   );
 

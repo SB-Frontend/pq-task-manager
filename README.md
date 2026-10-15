@@ -81,17 +81,42 @@ client component importing it is a build failure, not a runtime bug.
 When closed, `/register` **redirects to `/login`** and the login page shows no
 register link. The owner's Settings → Accounts flow is unaffected either way.
 
-This matters because the application has **no per-user data scoping** — every
-signed-in user sees every project, task and work log. Task assignment records
-who is working on something; it is not access control. Leaving registration open
-on a public URL would let anyone read and edit everything.
+This matters because the owner account sees everything. Leaving registration
+open on a public URL would let a stranger create an account and start
+accumulating access as work is assigned.
+
+## Who sees what
+
+**Work is scoped by assignment.**
+
+| | Owner | Everyone else |
+| --- | --- | --- |
+| Sees | every project, task and work log | only tasks assigned to them, and the projects holding those tasks |
+| Creates projects and tasks | yes | no |
+| Edits or archives a project | yes | no |
+| Edits a task | any | only their own |
+| Sets a task's assignee or project | yes | no |
+| Deletes a task | yes | no |
+| Logs work | any task | only their own tasks |
+
+A project appears for someone the moment they are assigned a task in it, and
+disappears when that task is reassigned away. Unassigned tasks are visible to
+the owner only. Project figures a member sees — "1 of 2 complete" — describe
+their own tasks, not the project's total.
+
+Anything a person may not see returns **404**, the same answer as an id that
+never existed. The rule lives in one module, `lib/auth/scope.ts`, and is
+enforced server-side in every query and every action, not by hiding buttons.
+
+**A new account starts empty.** Until you assign it a task it sees no projects
+and no tasks at all.
 
 ### Adding people
 
-**The first account created owns the instance.** The owner gets one extra
-capability: an **Accounts** section in Settings that lists existing accounts and
-can create new ones. The new account is not signed in — share the password with
-them securely.
+**The first account created owns the instance.** The owner gets the extra
+capabilities in the table above, including an **Accounts** section in Settings
+that lists existing accounts and can create new ones. The new account is not
+signed in — share the password with them securely.
 
 `ALLOW_REGISTRATION=true` remains an emergency route (for example if no owner
 account can sign in), but Settings is the normal way to add someone. For
@@ -133,9 +158,10 @@ Settings → Environment Variables. The service-role key must not be prefixed
 
 ### Recommended before exposing a public URL
 
-Because there is no per-user data scoping, restrict who can reach the
-deployment — for example Vercel Deployment Protection, or hosting it behind a
-private network — and keep registration closed.
+Work is scoped by assignment, but the owner account still sees everything and
+scoping is enforced in the application rather than at the database. Restrict who
+can reach the deployment — for example Vercel Deployment Protection, or hosting
+it behind a private network — and keep registration closed.
 
 ## Backups
 

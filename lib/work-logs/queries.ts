@@ -1,6 +1,11 @@
 import "server-only";
 
-import { requireUser } from "@/lib/auth/auth";
+import {
+  canSeeTask,
+  readVisibleTasks,
+  requireViewer,
+  scopeWorkLogs,
+} from "@/lib/auth/scope";
 import { projects } from "@/lib/storage/projects";
 import { tasks } from "@/lib/storage/tasks";
 import { workLogs } from "@/lib/storage/work-logs";
@@ -25,53 +30,75 @@ export function totalMinutes(logs: WorkLog[]): number {
   return logs.reduce((sum, log) => sum + log.minutes, 0);
 }
 
-/** Every work log, with task and project resolved for display. */
+/**
+ * Work logs the viewer may see, with task and project resolved for display.
+ *
+ * Scoped **through the task**: a member sees every log on a task assigned to
+ * them, including any logged by someone else before it was reassigned. Work
+ * logs record what was done on a task, not who did it — there is no author
+ * column — so the task is the only thing there is to scope by.
+ */
 export async function listWorkLogs(): Promise<WorkLogWithContext[]> {
-  await requireUser();
+  const viewer = await requireViewer();
 
-  const [allLogs, allTasks, allProjects] = await Promise.all([
+  const [allLogs, visibleTasks, allProjects] = await Promise.all([
     workLogs.list(),
-    tasks.list(),
+    readVisibleTasks(viewer),
     projects.list(),
   ]);
 
-  return allLogs.sort(byNewest).map((log) => {
-    const task = allTasks.find((candidate) => candidate.id === log.taskId) ?? null;
-    const project = task
-      ? (allProjects.find((candidate) => candidate.id === task.projectId) ?? null)
-      : null;
+  return scopeWorkLogs(viewer, allLogs, visibleTasks)
+    .sort(byNewest)
+    .map((log) => {
+      const task = visibleTasks.find((candidate) => candidate.id === log.taskId) ?? null;
+      const project = task
+        ? (allProjects.find((candidate) => candidate.id === task.projectId) ?? null)
+        : null;
 
-    return {
-      ...log,
-      task: task ? { id: task.id, title: task.title } : null,
-      project: project ? { id: project.id, name: project.name } : null,
-    };
-  });
+      return {
+        ...log,
+        task: task ? { id: task.id, title: task.title } : null,
+        project: project ? { id: project.id, name: project.name } : null,
+      };
+    });
 }
 
-/** Work logs for one task, newest first. */
+/** Work logs for one task, newest first. Empty when the task is not visible. */
 export async function listWorkLogsForTask(taskId: string): Promise<WorkLog[]> {
-  await requireUser();
+  const viewer = await requireViewer();
+
+  const task = await tasks.find(taskId);
+  if (!task || !canSeeTask(viewer, task)) return [];
 
   const own = await workLogs.findWhere({ taskId });
   return own.sort(byNewest);
 }
 
-/** One work log, or null when the id matches nothing. */
+/** One work log, or null when it does not exist or its task is not visible. */
 export async function getWorkLog(id: string): Promise<WorkLog | null> {
-  await requireUser();
-  return workLogs.find(id);
+  const viewer = await requireViewer();
+
+  const log = await workLogs.find(id);
+  if (!log) return null;
+
+  const task = await tasks.find(log.taskId);
+  if (!task || !canSeeTask(viewer, task)) return null;
+
+  return log;
 }
 
 /** Tasks offered in the work log form, most recently updated first. */
 export async function listSelectableTasks(): Promise<
   { id: string; title: string; projectName: string }[]
 > {
-  await requireUser();
+  const viewer = await requireViewer();
 
-  const [allTasks, allProjects] = await Promise.all([tasks.list(), projects.list()]);
+  const [visibleTasks, allProjects] = await Promise.all([
+    readVisibleTasks(viewer),
+    projects.list(),
+  ]);
 
-  return allTasks
+  return visibleTasks
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map((task) => ({
       id: task.id,

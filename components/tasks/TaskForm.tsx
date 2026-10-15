@@ -30,15 +30,48 @@ function toHours(minutes?: number): string | undefined {
   return String(Math.round((minutes / 60) * 100) / 100);
 }
 
+/**
+ * A value the viewer may see but not change.
+ *
+ * Deliberately not a disabled <Select>: there is no control here, so there is
+ * nothing for a <label> to point at. A heading and the value say the same thing
+ * without pretending an input exists.
+ */
+function ReadOnlyField({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-sm font-medium">{label}</p>
+      <p className="rounded-md border border-border bg-foreground/5 px-3 py-2 text-sm text-muted">
+        {value}
+      </p>
+      <p className="text-xs text-muted">{hint}</p>
+    </div>
+  );
+}
+
 interface TaskFormProps {
   /** Create or update: both share this component, neither duplicates it. */
   action: (state: TaskFormState, formData: FormData) => Promise<TaskFormState>;
   projects: Pick<Project, "id" | "name" | "status">[];
-  /** Everyone a task can be assigned to. Assignment grants no access. */
+  /** Everyone a task can be assigned to. Assigning is owner-only. */
   assignees: Pick<PublicUser, "id" | "name">[];
   task?: Task;
   /** Preselects the project when adding a task from a project page. */
   defaultProjectId?: string;
+  /**
+   * Show the project and assignee as fixed values rather than selects, for a
+   * viewer who may edit the task but not decide where it lives or who holds it.
+   * The server pins both regardless; this keeps the form honest.
+   */
+  lockPlacement?: boolean;
   submitLabel: string;
   cancelHref: string;
 }
@@ -51,10 +84,17 @@ export default function TaskForm({
   assignees,
   task,
   defaultProjectId,
+  lockPlacement = false,
   submitLabel,
   cancelHref,
 }: TaskFormProps) {
   const [state, formAction, pending] = useActionState(action, initialState);
+
+  const projectName =
+    projects.find((project) => project.id === task?.projectId)?.name ??
+    "Project unavailable";
+  const assigneeName =
+    assignees.find((user) => user.id === task?.assigneeId)?.name ?? "Unassigned";
 
   return (
     <form action={formAction} className="space-y-5" noValidate>
@@ -76,30 +116,47 @@ export default function TaskForm({
         error={state.fieldErrors?.title?.[0]}
       />
 
-      <Select
-        label="Project"
-        name="projectId"
-        required
-        options={projects.map((project) => ({
-          value: project.id,
-          label:
-            project.status === "archived"
-              ? `${project.name} (archived)`
-              : project.name,
-        }))}
-        placeholder="Select a project"
-        defaultValue={task?.projectId ?? defaultProjectId ?? ""}
-        error={state.fieldErrors?.projectId?.[0]}
-      />
+      {lockPlacement ? (
+        <>
+          <ReadOnlyField
+            label="Project"
+            value={projectName}
+            hint="Only the owner of this instance can move a task between projects."
+          />
+          <ReadOnlyField
+            label="Assignee"
+            value={assigneeName}
+            hint="Only the owner of this instance can reassign a task."
+          />
+        </>
+      ) : (
+        <>
+          <Select
+            label="Project"
+            name="projectId"
+            required
+            options={projects.map((project) => ({
+              value: project.id,
+              label:
+                project.status === "archived"
+                  ? `${project.name} (archived)`
+                  : project.name,
+            }))}
+            placeholder="Select a project"
+            defaultValue={task?.projectId ?? defaultProjectId ?? ""}
+            error={state.fieldErrors?.projectId?.[0]}
+          />
 
-      <Select
-        label="Assignee"
-        name="assigneeId"
-        options={assignees.map((user) => ({ value: user.id, label: user.name }))}
-        placeholder="Unassigned"
-        defaultValue={task?.assigneeId ?? ""}
-        error={state.fieldErrors?.assigneeId?.[0]}
-      />
+          <Select
+            label="Assignee"
+            name="assigneeId"
+            options={assignees.map((user) => ({ value: user.id, label: user.name }))}
+            placeholder="Unassigned"
+            defaultValue={task?.assigneeId ?? ""}
+            error={state.fieldErrors?.assigneeId?.[0]}
+          />
+        </>
+      )}
 
       <Textarea
         label="Description"

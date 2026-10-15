@@ -3,17 +3,31 @@ import TaskList from "@/components/tasks/TaskList";
 import ButtonLink from "@/components/ui/ButtonLink";
 import EmptyState from "@/components/ui/EmptyState";
 import PageHeader from "@/components/ui/PageHeader";
-import { requireUser } from "@/lib/auth/auth";
+import { canCreateTasks, requireViewer } from "@/lib/auth/scope";
 import { hasActiveFilters, parseTaskQuery } from "@/lib/tasks/filters";
 import { listTasks } from "@/lib/tasks/queries";
 import { listAssignableUsers } from "@/lib/users/queries";
 
 export const metadata = { title: "Tasks" };
 
-const FIELDS = [
+const OWNER_FIELDS = [
   "search",
   "project",
   "assignee",
+  "status",
+  "priority",
+  "due",
+  "sort",
+] as const;
+
+/**
+ * A member's tasks are all assigned to them, so filtering by assignee would
+ * offer a single choice that changes nothing. The field is dropped rather than
+ * shown empty.
+ */
+const MEMBER_FIELDS = [
+  "search",
+  "project",
   "status",
   "priority",
   "due",
@@ -25,7 +39,8 @@ export default async function TasksPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  await requireUser();
+  const viewer = await requireViewer();
+  const canCreate = canCreateTasks(viewer);
 
   const query = parseTaskQuery(await searchParams);
   const [{ tasks, totalCount, projectOptions }, assigneeOptions] = await Promise.all([
@@ -38,21 +53,32 @@ export default async function TasksPage({
     <div className="space-y-6">
       <PageHeader
         title="Tasks"
-        description="Track your project work and progress."
-        actions={<ButtonLink href="/app/tasks/new">New Task</ButtonLink>}
+        description={
+          canCreate
+            ? "Track your project work and progress."
+            : "Tasks assigned to you."
+        }
+        actions={canCreate ? <ButtonLink href="/app/tasks/new">New Task</ButtonLink> : null}
       />
 
       {/* With no tasks at all there is nothing to filter, so the bar is hidden. */}
       {totalCount === 0 ? (
-        <EmptyState
-          title="No tasks yet"
-          description="Add your first task to start tracking what you are working on."
-          action={<ButtonLink href="/app/tasks/new">Add Task</ButtonLink>}
-        />
+        canCreate ? (
+          <EmptyState
+            title="No tasks yet"
+            description="Add your first task to start tracking what you are working on."
+            action={<ButtonLink href="/app/tasks/new">Add Task</ButtonLink>}
+          />
+        ) : (
+          <EmptyState
+            title="No tasks assigned to you"
+            description="Tasks appear here once the owner of this instance assigns one to you."
+          />
+        )
       ) : (
         <>
           <TaskFilters
-            fields={FIELDS}
+            fields={canCreate ? OWNER_FIELDS : MEMBER_FIELDS}
             projectOptions={projectOptions}
             assigneeOptions={assigneeOptions}
             resultCount={tasks.length}
